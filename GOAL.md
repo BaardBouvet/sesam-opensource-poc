@@ -1,3 +1,5 @@
+> **Detailed plans:** See [plans/README.md](plans/README.md) for the master plan, individual feature plans, and ADRs.
+
 # high level
 
 we are going do to do a poc on how to collect contacts and customers from hubspot (the crm) and tripletex (a nordic erp). 
