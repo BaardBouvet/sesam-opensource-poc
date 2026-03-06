@@ -24,4 +24,6 @@ Use **PostgreSQL** as the primary data store for the PoC.
 
 - Golden records can be views or incrementally materialized views
 - MDM rule logic can live in SQL or Python (decision deferred)
+- Simulator storage also uses the same Postgres instance, but in isolated simulator schemas
+- Access control must prevent model/MDM roles from reading simulator schemas directly
 - Alternative backends (Snowflake, DuckDB) out of scope for now; see [ADR-002 consequences](./002-postgresql-storage.md)

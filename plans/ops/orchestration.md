@@ -1,4 +1,4 @@
-# Plan 05: Orchestration
+# Orchestration
 
 Schedule and coordinate reads from source systems, transformations, and write-backs.
 
@@ -10,6 +10,7 @@ Schedule and coordinate reads from source systems, transformations, and write-ba
 - **Pros:**
   - Asset-based model fits naturally: each table/view is a software-defined asset
   - Built-in schedules, sensors, and partitioning
+  - Supports sensor-driven runs for webhook events
   - Great UI (Dagit/Dagster UI) for observability
   - First-class dlt integration (`dagster-dlt`)
   - First-class Postgres I/O manager
@@ -43,6 +44,7 @@ Schedule and coordinate reads from source systems, transformations, and write-ba
   - Minimum dependencies
 - **Cons:**
   - No built-in retries, dependency tracking, or UI
+  - Weak webhook handling; needs custom queue + workers to avoid dropped events
   - Harder to manage as pipeline complexity grows
   - Must build observability from scratch
 - **Effort:** Low initially, High as complexity grows
@@ -60,17 +62,36 @@ Schedule and coordinate reads from source systems, transformations, and write-ba
   - Overkill for scheduled batch reads
 - **Effort:** High
 
+### Option E: Orchestrator + API Gateway Plan
+
+- **What:** Keep orchestration focused on workflow logic; govern API gateway/APIM (ingress + outbound controls) in [api-gateway-traffic-control.md](api-gateway-traffic-control.md).
+
 ## Proposed Schedule (Draft)
 
-| Pipeline                | Frequency   | Notes                           |
-|-------------------------|-------------|---------------------------------|
-| HubSpot ingest          | Every 15 min | Incremental via `updatedAfter`  |
-| Tripletex ingest        | Every 15 min | Incremental via last modified   |
-| Record linkage + MDM    | After ingest | Triggered by asset dependency   |
-| Write-back to HubSpot   | After MDM    | Only if changes detected        |
-| Write-back to Tripletex | After MDM    | Only if changes detected        |
+| Pipeline                      | Trigger                    | Notes                                         |
+|-------------------------------|----------------------------|-----------------------------------------------|
+| HubSpot ingest                | Webhook + every 15 min     | Event-driven primary, polling fallback        |
+| Tripletex ingest              | Webhook + every 15 min     | Event-driven primary, polling fallback        |
+| Delete verification           | After inferred deletes      | Lookup-by-id confirmation before tombstone    |
+| Deletion/tombstone processor  | After each ingest/event    | Maintains `is_deleted` + `deleted_at`         |
+| Record linkage + MDM          | After ingest                | Triggered by asset dependency                 |
+| Association linkage           | After person/company linkage | Builds unified contact→company links        |
+| Write-back to HubSpot         | After MDM                   | Only if changes detected                      |
+| Write-back to Tripletex       | After MDM                   | Only if changes detected                      |
+| Reconciliation job            | Nightly                     | Full-sync canonical correction of provisional webhook state |
 
 ## Open Questions
 
 - Should Dagster share the same Postgres instance as the data, or have its own?
-- Do we need real-time sensors (e.g. webhook-triggered) in Phase 1, or is scheduled polling enough?
+
+## API Gateway Positioning
+
+- Ingress gateway sits before `webhook-receiver`; orchestrator remains downstream and unchanged in responsibility.
+
+## Related Plans
+
+- [Webhooks](../ingest/webhooks.md)
+- [Data Ingestion](../ingest/data-ingestion.md)
+- [Deletion Tracking & Verification](../ingest/deletion-tracking.md)
+- [MDM Rules & Write-Back](../sync/mdm-rules-writeback.md)
+- [API Gateway & Traffic Control](api-gateway-traffic-control.md)

@@ -1,6 +1,6 @@
 # Sesam Open-Source PoC — Master Plan
 
-A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Tripletex** (ERP), merging them into a common model for BI/reporting, and syncing changes back with configurable MDM rules.
+A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Tripletex** (ERP), merging them into a common model for BI/reporting, preserving many-to-many contact→company associations, and syncing changes back with configurable MDM rules (including singleton projection for Tripletex contacts).
 
 ## Key Decisions (ADRs)
 
@@ -9,6 +9,26 @@ A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Triplet
 | [ADR-001](adrs/001-python-stack.md) | Python as primary language |
 | [ADR-002](adrs/002-postgresql-storage.md) | PostgreSQL as primary storage |
 | [ADR-003](adrs/003-deployment-strategy.md) | Skaffold + Testcontainers + Devcontainers |
+
+## API Artifacts in Repository
+
+- Tripletex OpenAPI snapshot: `specs/tripletex/openapi.json`
+- Tripletex webhook reference: `specs/tripletex/webhook-reference.md`
+- HubSpot required API docs index: `specs/hubspot/required-api-docs.md`
+
+## Naming Conventions
+
+- Plan files are **not numbered**.
+- Use lowercase kebab-case filenames (e.g. `data-ingestion.md`, `record-linkage.md`).
+- Group folders use short names: `ingest/`, `model/`, `sync/`, `ops/`, `test/`.
+- One plan per concern/capability; avoid bundling unrelated items.
+- Keep phase assignment in this `README.md` only.
+- Keep cross-plan links relative and stable (`[Name](file-name.md)`).
+- Do not summarize one plan inside another plan.
+- A concise `Related Plans` section is encouraged when it improves navigation.
+- If another plan is mentioned, always link to it.
+- `Open Questions` sections must contain only unresolved questions.
+- When a question is answered, remove it from `Open Questions` and move the outcome to the relevant decision/rules section in the same plan.
 
 ## Architecture Overview
 
@@ -20,70 +40,84 @@ A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Triplet
        │  read                │  read
        ▼                      ▼
 ┌─────────────────────────────────────┐
-│          Ingestion (dlt)            │  ← Plan 01
+│          Ingestion (dlt)            │
 ├─────────────────────────────────────┤
 │     Staging Tables (Postgres)       │
 ├─────────────────────────────────────┤
-│  Record Linkage (static rules)      │  ← Plan 03
+│  Record Linkage (static rules)      │
 ├─────────────────────────────────────┤
-│  Reference Mapping (mapping table)  │  ← Plan 09
+│  Association Linkage (contact↔company) │
 ├─────────────────────────────────────┤
-│  MDM Rules (SQL views / IVM)        │  ← Plan 04
+│  Reference Mapping (mapping table)  │
 ├─────────────────────────────────────┤
-│  Golden Records: Person & Company   │  ← Plan 02
+│  MDM Rules (SQL views / IVM)        │
+├─────────────────────────────────────┤
+│  Golden Records: Person & Company   │
 ├─────────────────────────────────────┤
 │  BI / Reporting                     │
 └──────┬──────────────────────┬───────┘
        │  write-back          │  write-back
        ▼                      ▼
 ┌──────────────┐     ┌──────────────┐
-│   HubSpot    │     │  Tripletex   │  ← Plan 04 (CAS writes)
+│   HubSpot    │     │  Tripletex   │
 └──────────────┘     └──────────────┘
 
-Orchestration: Dagster  ← Plan 05
-Tracing: OpenTelemetry  ← Plan 06
-Monitoring: Prometheus + Grafana  ← Plan 07
-Simulators: FastAPI mock servers  ← Plan 08
+Orchestration: Dagster (schedules + sensors)
+Webhooks: Phase 2 optional (see `ingest/webhooks.md`)
+Tracing: Phase 2 optional (OpenTelemetry)
+Monitoring: Phase 2 optional (Prometheus + Grafana)
+Simulators: FastAPI mock servers
 ```
 
 ## Phase 1 — Core PoC
 
 Goal: End-to-end data flow from simulated sources through golden records and back.
 
-| # | Plan | Summary | Key Decision |
-|---|------|---------|--------------|
-| 1 | [Data Ingestion](01-data-ingestion.md) | Read from HubSpot & Tripletex | dlt (recommended) vs raw API vs Airbyte |
-| 2 | [Common Data Model](02-common-data-model.md) | Person & Company golden schema | SQL views (recommended) vs ETL tables vs dbt |
-| 3 | [Record Linkage](03-record-linkage.md) | Merge records across systems | Deterministic keys (recommended) vs scoring vs fuzzy |
-| 4 | [MDM Rules & Write-Back](04-mdm-rules-writeback.md) | Per-property mastering, CAS writes | SQL rules (recommended) vs Python vs declarative config |
-| 5 | [Orchestration](05-orchestration.md) | Scheduling & coordination | Dagster (recommended) vs Prefect vs cron vs Temporal |
-| 6 | [Traceability](06-traceability.md) | Audit trail for all writes | OpenTelemetry + audit table (recommended) vs logging |
-| 7 | [Monitoring](07-monitoring.md) | Dashboards & alerting | Prometheus+Grafana (recommended) + Dagster UI |
-| 8 | [Simulators](08-simulators.md) | Fake HubSpot & Tripletex | FastAPI (recommended) vs WireMock vs fixtures |
-| 9 | [Reference Mapping](09-reference-mapping.md) | Value translation (countries, etc.) | Postgres mapping table (recommended) |
+Phase 1 is polling/scheduled-sync first (no webhook dependency).
 
-## Phase 2 — Optional Features
+## Phase 1 — Core Plans
 
-| Feature | Plan | Notes |
-|---------|------|-------|
-| Last modified wins | [10a](10-optional-features.md#10a-last-modified-wins) | Needs per-field timestamps from sources |
-| Fuzzy merging + curation | [10b](10-optional-features.md#10b-fuzzy-merging-with-agent--human-curation) | Potential spin-off project |
-| Webhook real-time sync | [10c](10-optional-features.md#10c-webhook-support-for-near-real-time-sync) | Both systems support webhooks |
-| Alternative backends | [10d](10-optional-features.md#10d-alternative-backends) | Snowflake, DuckDB |
+| Area | Plan | Summary | Key Decision / Notes |
+|------|------|---------|----------------------|
+| Testing & Simulation | [Simulators](test/simulators.md) | Fake HubSpot & Tripletex | FastAPI (recommended) vs WireMock vs fixtures |
+| Source & Ingestion | [Data Ingestion](ingest/data-ingestion.md) | Read from HubSpot & Tripletex | dlt (recommended) vs raw API vs Airbyte |
+| Transformation & Modeling | [Record Linkage](model/record-linkage.md) | Merge records + associations across systems | Deterministic keys (recommended) vs scoring vs fuzzy |
+| Transformation & Modeling | [Common Data Model](model/common-data-model.md) | Person, Company, Association schema | SQL views (recommended) vs ETL tables vs dbt |
+| Write-Back & Governance | [MDM Rules & Write-Back](sync/mdm-rules-writeback.md) | Per-property mastering, CAS writes | SQL rules (recommended) vs Python vs declarative config |
+| Platform & Operations | [Orchestration](ops/orchestration.md) | Scheduling & coordination | Dagster (recommended) vs Prefect vs cron vs Temporal |
+
+## Phase 2 — Optional Plans
+
+| Area | Plan | Summary | Key Decision / Notes |
+|------|------|---------|----------------------|
+| Source & Ingestion | [Webhooks](ingest/webhooks.md) | Event-driven ingestion and replay | After polling-first baseline |
+| Source & Ingestion | [Deletion Tracking & Verification](ingest/deletion-tracking.md) | Tombstones and delete verification | Hardening beyond baseline polling sync |
+| Transformation & Modeling | [Reference Mapping](model/reference-mapping.md) | Value translation (countries, etc.) | Late binding: apply after Phase 1 MDM baseline |
+| Write-Back & Governance | [Deletion Conflict Policies](sync/deletion-conflict-policies.md) | Delete-vs-update conflict handling | Optional policy hardening |
+| Platform & Operations | [API Gateway & Traffic Control](ops/api-gateway-traffic-control.md) | API gateway controls for ingress/egress | For event-driven and higher-scale operation |
+| Platform & Operations | [Traceability](ops/traceability.md) | Audit trail for all writes | OpenTelemetry + audit table |
+| Platform & Operations | [Monitoring](ops/monitoring.md) | Dashboards & alerting | Prometheus+Grafana + Dagster UI |
+| Platform & Operations | [Alternative Backends](ops/alternative-backends.md) | Other warehouse/runtime choices | Snowflake, DuckDB |
+| Transformation & Modeling | [Last Modified Wins](model/last-modified-wins.md) | Per-field timestamp conflict resolution | Requires source timestamps |
+| Transformation & Modeling | [Fuzzy Merging with Agent & Human Curation](model/fuzzy-merging-curation.md) | Probabilistic matching workflow | Potential spin-off project |
+
+## Backlog / Spin-Offs
+
+- [Spin-Off Ideas](spin-off-ideas.md)
 
 ## Implementation Order
 
 Suggested order based on dependencies:
 
-1. **Simulators** (Plan 08) — enables all development without real accounts
-2. **Data Ingestion** (Plan 01) — read from simulators into Postgres
-3. **Reference Mapping** (Plan 09) — needed before building the common model
-4. **Record Linkage** (Plan 03) — merge records across systems
-5. **Common Data Model** (Plan 02) — golden record views
-6. **MDM Rules & Write-Back** (Plan 04) — per-property rules and CAS writes
-7. **Orchestration** (Plan 05) — schedule everything (can start earlier in parallel)
-8. **Traceability** (Plan 06) — instrument write-back with OTel
-9. **Monitoring** (Plan 07) — dashboards and alerting
+1. **Simulators** — enables all development without real accounts
+2. **Data Ingestion** — read entities + associations into Postgres, include tombstones
+3. **Record Linkage** — merge records across systems and link associations
+4. **Common Data Model** — golden record views (person/company/association)
+5. **MDM Rules & Write-Back** — per-property rules and CAS writes
+6. **Orchestration** — schedules/sensors and dependency graph
+
+Phase 2 sequencing note:
+- **Reference Mapping** follows MDM baseline (late binding), not before it.
 
 ## Open Questions (Cross-Cutting)
 

@@ -1,6 +1,7 @@
-# Plan 03: Record Linkage
+# Record Linkage
 
 Merge contacts and companies across HubSpot and Tripletex into unified golden records using static rules.
+Link and preserve contact→company associations as core output.
 
 ## Options
 
@@ -58,8 +59,30 @@ FULL OUTER JOIN tripletex_customers t
   ON normalize_org_nr(h.org_number) = normalize_org_nr(t.org_number)
 ```
 
+## Association Linkage (Core)
+
+- Resolve `person_id` and `company_id` first via deterministic linkage.
+- Build unified relationship rows in `person_company_association` by mapping source association rows to golden ids.
+- If either side is deleted/tombstoned, mark association as deleted (`is_deleted=true`) unless source explicitly indicates re-association.
+- Handle many-to-many as default in Phase 1; optionally derive a `primary_company_id` convenience field in `person`.
+
+## Source-Specific Mapping Rules (HubSpot ↔ Tripletex)
+
+- Tripletex contact has one company link (`Contact.customer`), while HubSpot supports many contact→company associations.
+- Projection rule to singleton Tripletex mapping:
+  - preferred source: HubSpot contact→company association `Primary` (`associationTypeId=1`)
+  - fallback order when primary is missing/invalid:
+    1. most recently updated associated company
+    2. lowest HubSpot company id (stable tie-breaker)
+- Multiple HubSpot primaries for one person are treated as data-quality conflicts.
+- Phase 1 policy for multi-primary conflict:
+  - do not create duplicate Tripletex contacts
+  - keep one deterministic projected company link
+  - record conflict in `mapping_conflicts` for review
+
 ## Open Questions
 
 - Is org number reliably present in both systems?
 - For persons, is email the best primary key or do we need phone-based matching too?
 - How do we handle 1:N matches (one HubSpot contact matching multiple Tripletex contacts)?
+- Should deleted associations be propagated immediately to targets, or delayed until a reconciliation run confirms they are not transient API inconsistencies?

@@ -1,6 +1,9 @@
-# Plan 02: Common Data Model (Person & Company)
+# Common Data Model (Person & Company)
 
 Define a unified schema for persons and companies that merges data from HubSpot and Tripletex.
+Contact→company associations and deletion state are core parts of the common model.
+
+Phase 1 decision: associations are modeled as many-to-many by default.
 
 ## Options
 
@@ -54,6 +57,8 @@ person:
   email: string?
   phone: string?
   company_id: uuid? (FK)
+  is_deleted: boolean default false
+  deleted_at: timestamp?
   created_at: timestamp
   updated_at: timestamp
 
@@ -66,6 +71,20 @@ company:
   address: string?
   city: string?
   country: string (normalized)
+  is_deleted: boolean default false
+  deleted_at: timestamp?
+  created_at: timestamp
+  updated_at: timestamp
+
+person_company_association:
+  id: uuid (generated)
+  person_id: uuid (FK)
+  company_id: uuid (FK)
+  relation_type: string?   # employee, billing_contact, owner, etc.
+  source_hubspot_assoc_id: string?
+  source_tripletex_assoc_id: string?
+  is_deleted: boolean default false
+  deleted_at: timestamp?
   created_at: timestamp
   updated_at: timestamp
 ```

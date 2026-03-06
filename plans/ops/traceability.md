@@ -1,4 +1,4 @@
-# Plan 06: Traceability & Audit
+# Traceability & Audit
 
 Trace every write to HubSpot and Tripletex so we can explain why a change happened and replay/debug API calls.
 

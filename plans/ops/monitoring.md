@@ -1,4 +1,4 @@
-# Plan 07: Monitoring & Observability
+# Monitoring & Observability
 
 Monitor when data was read/written, how many changes happened, and surface failures.
 
@@ -14,6 +14,9 @@ Monitor when data was read/written, how many changes happened, and surface failu
   - `pipeline_duration_seconds{pipeline}` — run duration
   - `golden_records_total{entity}` — current golden record count
   - `linkage_match_rate{entity}` — % of records matched across systems
+  - `tripletex_webhook_subscription_status{subscription_id,status}` — current Tripletex subscription status
+  - `tripletex_webhook_subscription_non_active_total{status}` — count of non-active status transitions
+  - `tripletex_webhook_delivery_gap_seconds` — time since last Tripletex webhook received
 - **Pros:**
   - Industry standard, massive ecosystem
   - Grafana provides alerting, dashboards, and annotation support
@@ -53,7 +56,22 @@ Monitor when data was read/written, how many changes happened, and surface failu
 
 Use **Option A + B**: Dagster for pipeline observability (runs, failures, asset status) and Prometheus + Grafana for business metrics (record counts, change rates, error rates). Grafana can also host Tempo (traces) and Loki (logs) for a unified observability stack.
 
+## Required Alerts
+
+- Alert immediately when any Tripletex webhook subscription enters non-active/broken state (including `DISABLED_TOO_MANY_ERRORS`).
+- Alert when Tripletex webhook delivery gap exceeds threshold (e.g., no events for expected-active period).
+- Alert on repeated subscription re-enable attempts without recovery.
+
+## Tripletex Webhook Incident Runbook
+
+1. Confirm alert source (`tripletex_webhook_subscription_status` or delivery-gap alert).
+2. Verify webhook receiver health and callback reachability.
+3. Check auth header validation failures and recent 4xx/5xx spikes.
+4. Fix root cause and re-enable subscription via `PUT /v2/event/subscription/{id}`.
+5. Verify a follow-up event reaches ingestion and processing.
+6. Close incident and update alert/runbook thresholds if needed.
+
 ## Open Questions
 
-- Do we need alerting in Phase 1? If so, where? (Slack, email, PagerDuty?)
+- Which Phase 1 alert channels do we use first? (Slack, email, PagerDuty?)
 - Should Grafana dashboards be committed as code (JSON/YAML provisioning)?

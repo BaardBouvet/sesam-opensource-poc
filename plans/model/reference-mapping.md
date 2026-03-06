@@ -1,4 +1,4 @@
-# Plan 09: Reference Mapping
+# Reference Mapping
 
 Handle value mappings between systems (e.g. Tripletex uses Norwegian country names, HubSpot uses English).
 

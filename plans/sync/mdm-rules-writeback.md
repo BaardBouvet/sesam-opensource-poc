@@ -1,6 +1,8 @@
-# Plan 04: MDM Rules & Write-Back
+# MDM Rules & Write-Back
 
 Master data management rules per property, compare-and-swap writes, and syncing data back to HubSpot and Tripletex.
+
+Includes write-back of contact→company associations and deletion/tombstone propagation.
 
 ## MDM Rule Options
 
@@ -84,6 +86,43 @@ To avoid lost writes when MDM rules say "name from HubSpot, phone from Tripletex
 4. Write only if state matches expectations
 
 Both HubSpot and Tripletex support conditional updates or at least return current state on read.
+
+## Deletion Propagation Policy (Phase 1)
+
+- Consume canonical deletion state produced by deletion tracking/reconciliation.
+- Propagate deletes to targets only from canonical tombstone state (not from provisional single-source signals).
+- Prefer soft-delete/deactivation when supported; avoid immediate hard-delete in Phase 1.
+- Keep target-specific propagation audit fields in `sync_state`/writeback audit tables.
+
+## Association Write-Back
+
+- Treat contact→company links as first-class write-back entities.
+- Diff desired association set vs source association set.
+- Apply create/delete association operations with CAS/idempotency keys.
+- Use many-to-many semantics in Phase 1.
+
+### Tripletex contact-company write rule
+
+- Tripletex target expects one company per contact.
+- Write the projected primary company from `person_tripletex_projection`.
+- If multiple HubSpot companies are marked as primary for the same person:
+  - do not create duplicate Tripletex contacts in Phase 1
+  - select one deterministically (same logic as ingestion/linkage)
+  - write conflict row to `mapping_conflicts` with severity `warning`
+
+### Optional extension (Phase 2)
+
+- Enable `split_contact_on_multi_primary=true` feature flag to create multiple Tripletex contacts from one golden person only when explicitly approved.
+- Requires stable synthetic key strategy (`person_id + company_id`) and explicit downstream reporting impact acknowledgement.
+
+## Related Plans
+
+- [Record Linkage](../model/record-linkage.md)
+- [Common Data Model](../model/common-data-model.md)
+- [Data Ingestion](../ingest/data-ingestion.md)
+- [Webhooks](../ingest/webhooks.md)
+- [API Gateway & Traffic Control](../ops/api-gateway-traffic-control.md)
+- [Traceability](../ops/traceability.md)
 
 ## Open Questions
 
