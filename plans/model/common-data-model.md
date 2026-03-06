@@ -5,6 +5,18 @@ Contact→company associations and deletion state are core parts of the common m
 
 Phase 1 decision: associations are modeled as many-to-many by default.
 
+Decisions:
+- Keep core model normalized for operational sync/use-cases.
+- Build separate OLAP-friendly analytics views in a dedicated analytics plan.
+- Track provenance metadata in core entities.
+- Use per-field provenance in Phase 1 to simplify debugging.
+- Do not exclude high-volume modeled fields from per-field provenance in Phase 1.
+- When multiple Tripletex contacts share the same email and resolve to one person, keep all source contact ids in an array.
+- Track source identifiers as arrays for both HubSpot and Tripletex across person/company/association entities.
+- Do not include canonical `created_at`/`updated_at` in common model; use provenance/source metadata and audit layers instead.
+- Model country as a separate entity and reference it from `company` via `country_id`.
+- Derive deletion state from provenance/presence signals rather than storing canonical `is_deleted` or `deleted_at` in core entities.
+
 ## Options
 
 ### Option A: SQL Views over Staging Tables — Recommended
@@ -13,7 +25,7 @@ Phase 1 decision: associations are modeled as many-to-many by default.
 - **Pros:**
   - Raw data always available for debugging and re-processing
   - Views can be incrementally maintained with pg-trickle
-  - BI tools can query views directly
+  - Clear separation between operational core model and analytics projections
   - Easy to evolve the model without data migration
 - **Cons:**
   - View logic can become complex as MDM rules grow
@@ -49,47 +61,86 @@ Phase 1 decision: associations are modeled as many-to-many by default.
 
 ```
 person:
-  id: uuid (generated)
-  source_hubspot_id: string?
-  source_tripletex_id: string?
+  id: primary key (strategy TBD)
+  source_hubspot_ids: string[]
+  source_tripletex_ids: string[]
   first_name: string
   last_name: string
   email: string?
   phone: string?
-  company_id: uuid? (FK)
-  is_deleted: boolean default false
-  deleted_at: timestamp?
-  created_at: timestamp
-  updated_at: timestamp
+  field_provenance_json: jsonb  # per-field source provenance map
 
 company:
-  id: uuid (generated)
-  source_hubspot_id: string?
-  source_tripletex_id: string?
+  id: primary key (strategy TBD)
+  source_hubspot_ids: string[]
+  source_tripletex_ids: string[]
   name: string
   org_number: string?
   address: string?
   city: string?
-  country: string (normalized)
-  is_deleted: boolean default false
-  deleted_at: timestamp?
-  created_at: timestamp
-  updated_at: timestamp
+  country_id: uuid? (FK -> country.id)
+  field_provenance_json: jsonb  # per-field source provenance map
+
+country:
+  id: primary key (strategy TBD)
+  iso_code: string (e.g. NO, SE)
+  canonical_name: string (e.g. Norway, Sweden)
+  source_hubspot_values: string[]
+  source_tripletex_values: string[]
+  is_active: boolean default true
 
 person_company_association:
-  id: uuid (generated)
+  id: primary key (strategy TBD)
   person_id: uuid (FK)
   company_id: uuid (FK)
   relation_type: string?   # employee, billing_contact, owner, etc.
-  source_hubspot_assoc_id: string?
-  source_tripletex_assoc_id: string?
-  is_deleted: boolean default false
-  deleted_at: timestamp?
-  created_at: timestamp
-  updated_at: timestamp
+  source_hubspot_assoc_ids: string[]
+  source_tripletex_assoc_ids: string[]
+  linkage_provenance_json: jsonb
 ```
+
+Identity note:
+- `source_hubspot_ids` and `source_tripletex_ids` may contain multiple ids when deterministic linkage resolves duplicates/merges into one canonical record.
+
+Association note:
+- Person↔company linkage is represented only in `person_company_association` (no `company_id` on `person`).
+
+Country note:
+- Country normalization and merge inputs are maintained via the reference-mapping plan and joined into `country`.
+
+Deletion note:
+- Consumers that need explicit delete markers should use a derived projection/view (for example `deleted_at` inferred from provenance and source presence tables).
 
 ## Open Questions
 
-- What BI tool will consume this? (affects whether we need OLAP-friendly schema)
-- Should we track per-field provenance (which source each field came from) in the common model itself?
+- Primary key strategy for pure IVM:
+  - Option A: deterministic UUID derived from canonical `match_key` in IVM
+    - Pros: all transformation stays in IVM; reproducible ids
+    - Cons: ids change if `match_key` changes
+  - Option B: deterministic text key (`match_key`) as primary key
+    - Pros: simplest pure-IVM approach; no UUID helper function needed
+    - Cons: larger keys and indexes; leaks business-key semantics into PK
+  - Option C: separate stable surrogate id assignment outside IVM
+    - Pros: stable ids even if `match_key` changes
+    - Cons: breaks strict pure-IVM transformation boundary
+
+Option C design sketch (if selected):
+- Creation timing:
+  - Create surrogate ids immediately after deterministic linkage yields canonical `match_key` values for person/company/association.
+  - Run on every ingestion cycle; create only for unseen `(entity_type, match_key)`.
+- Creation mechanism:
+  - Maintain `identity_registry(entity_type, match_key, surrogate_id, created_at, updated_at)`.
+  - Upsert by `(entity_type, match_key)`:
+    - existing row -> reuse `surrogate_id`
+    - missing row -> insert with new surrogate id
+  - Join golden projections to `identity_registry` to expose stable ids.
+- Operational safeguards:
+  - Unique constraint on `(entity_type, match_key)`.
+  - Idempotent upsert and retry-safe execution.
+  - Add remap history table for key evolution (`old_match_key`, `new_match_key`, `changed_at`, `reason`).
+  - One-time backfill of `identity_registry` before enabling live upserts.
+
+## Related Plans
+
+- [Analytics Views](analytics-views.md)
+- [Reference Mapping](reference-mapping.md)

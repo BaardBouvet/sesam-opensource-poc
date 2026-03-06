@@ -48,19 +48,24 @@ A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Triplet
 ├─────────────────────────────────────┤
 │  Association Linkage (contact↔company) │
 ├─────────────────────────────────────┤
-│  Reference Mapping (mapping table)  │
-├─────────────────────────────────────┤
 │  MDM Rules (SQL views / IVM)        │
 ├─────────────────────────────────────┤
 │  Golden Records: Person & Company   │
-├─────────────────────────────────────┤
-│  BI / Reporting                     │
-└──────┬──────────────────────┬───────┘
-       │  write-back          │  write-back
-       ▼                      ▼
-┌──────────────┐     ┌──────────────┐
-│   HubSpot    │     │  Tripletex   │
-└──────────────┘     └──────────────┘
+└──────────────┬──────────────┬───────┘
+               │              │
+               │ BI path      │ Write-back path
+               ▼              ▼
+┌──────────────────────────┐  ┌──────────────────────────────┐
+│ Analytics Views (OLAP)   │  │ Reference Mapping (reverse)  │
+├──────────────────────────┤  ├──────────────────────────────┤
+│ BI / Reporting           │  │ Target-Specific Transforms   │
+└──────────────────────────┘  │ (HubSpot/Tripletex payloads) │
+                              └──────────────┬───────────────┘
+                                             │  write-back
+                                             ▼
+                                 ┌──────────────┐     ┌──────────────┐
+                                 │   HubSpot    │     │  Tripletex   │
+                                 └──────────────┘     └──────────────┘
 
 Orchestration: Dagster (schedules + sensors)
 Webhooks: Phase 2 optional (see `ingest/webhooks.md`)
@@ -92,7 +97,8 @@ Phase 1 is polling/scheduled-sync first (no webhook dependency).
 |------|------|---------|----------------------|
 | Source & Ingestion | [Webhooks](ingest/webhooks.md) | Event-driven ingestion and replay | After polling-first baseline |
 | Source & Ingestion | [Deletion Tracking & Verification](ingest/deletion-tracking.md) | Tombstones and delete verification | Hardening beyond baseline polling sync |
-| Transformation & Modeling | [Reference Mapping](model/reference-mapping.md) | Value translation (countries, etc.) | Late binding: apply after Phase 1 MDM baseline |
+| Transformation & Modeling | [Reference Mapping](model/reference-mapping.md) | Value translation (countries, etc.) | Late binding: apply after golden records are materialized |
+| Transformation & Modeling | [Analytics Views](model/analytics-views.md) | OLAP-friendly projections for BI/reporting | Separate plan; late-binding over golden records |
 | Write-Back & Governance | [Deletion Conflict Policies](sync/deletion-conflict-policies.md) | Delete-vs-update conflict handling | Optional policy hardening |
 | Platform & Operations | [API Gateway & Traffic Control](ops/api-gateway-traffic-control.md) | API gateway controls for ingress/egress | For event-driven and higher-scale operation |
 | Platform & Operations | [Traceability](ops/traceability.md) | Audit trail for all writes | OpenTelemetry + audit table |
@@ -117,7 +123,7 @@ Suggested order based on dependencies:
 6. **Orchestration** — schedules/sensors and dependency graph
 
 Phase 2 sequencing note:
-- **Reference Mapping** follows MDM baseline (late binding), not before it.
+- **Reference Mapping** is late binding and runs after golden records are materialized.
 
 ## Open Questions (Cross-Cutting)
 

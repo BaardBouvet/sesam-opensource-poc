@@ -22,6 +22,19 @@ Handle value mappings between systems (e.g. Tripletex uses Norwegian country nam
   -- ('country', 'tripletex', 'Sverige', 'Sweden')
   -- ('country', 'hubspot', 'Norway', 'Norway')
   ```
+- **Country merge input table (Phase 2 extension):**
+  ```sql
+  CREATE TABLE country_merge_input (
+    id SERIAL PRIMARY KEY,
+    source_system TEXT NOT NULL,       -- 'tripletex' | 'hubspot'
+    source_value TEXT NOT NULL,        -- raw country value from source
+    canonical_iso_code TEXT NOT NULL,  -- e.g. NO, SE
+    canonical_name TEXT NOT NULL,      -- e.g. Norway, Sweden
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT now()
+  );
+  ```
+  Use this as the authoritative merge input for building/updating the `country` entity in the common model.
 - **Pros:**
   - Simple, queryable, easy to maintain
   - Can be joined in SQL views (works with IVM)
@@ -62,6 +75,9 @@ Handle value mappings between systems (e.g. Tripletex uses Norwegian country nam
 | Country  | Sverige         | Sweden        | SE (ISO)  |
 | Country  | Danmark         | Denmark       | DK (ISO)  |
 | ...      | ...             | ...           | ...       |
+
+Country-specific note:
+- Country mappings should be managed in `country_merge_input` and then projected into `reference_mapping`/`country` views as needed.
 
 ## Open Questions
 
