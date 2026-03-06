@@ -11,6 +11,7 @@ All merge sources write pairwise links into `entity_link`:
 
 | Writer | Phase | When |
 |--------|-------|------|
+| Deterministic matcher (cross-system write-back links) | Phase 1 | Every ingestion cycle (highest priority) |
 | Deterministic matcher (email / org_number) | Phase 1 | Every ingestion cycle |
 | Fuzzy / probabilistic matcher | Phase 2 | Batch scoring run |
 | Human curator | Phase 2 | Manual review UI |
@@ -47,6 +48,7 @@ Pipeline flow:
 - Consolidated person stores all HubSpot/Tripletex source contact ids in `source_hubspot_ids` and `source_tripletex_ids`.
 - Company and association source identifiers are also tracked as arrays to support merged duplicates.
 - All linkage decisions, including Phase 1 deterministic rules, flow through the pairwise link table.
+- When write-back creates a new record in a target system, the source↔target mapping is captured in `cross_system_link` and fed into the link pipeline as a highest-priority deterministic rule.
 
 ### Option B: Rule-Based with Scoring
 
@@ -116,6 +118,10 @@ Cluster resolver note:
 - If either side is deleted/tombstoned, emit deletion provenance/presence signals for the association unless source explicitly indicates re-association.
 - Handle many-to-many as default in Phase 1.
 - If needed for downstream projection, compute `primary_company_id` in a dedicated projection/view, not as canonical `person` field.
+
+## Cross-System Write-Back Links
+
+See [MDM Rules & Write-Back — Cross-System Link Capture](../sync/mdm-rules-writeback.md#cross-system-link-capture) for the `cross_system_link` table and how write-back-created records feed deterministic links into `entity_link`.
 
 ## Source-Specific Mapping Rules (HubSpot ↔ Tripletex)
 
