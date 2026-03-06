@@ -16,6 +16,8 @@ Decisions:
 - Do not include canonical `created_at`/`updated_at` in common model; use provenance/source metadata and audit layers instead.
 - Model country as a separate entity and reference it from `company` via `country_id`.
 - Derive deletion state from provenance/presence signals rather than storing canonical `is_deleted` or `deleted_at` in core entities.
+- All linkage decisions (deterministic, fuzzy, human) are written as pairwise links into an external link table; a cluster resolver assigns golden IDs before IVM runs.
+- IVM only joins staging data against resolved cluster memberships — no ID generation or linkage logic inside IVM.
 
 ## Options
 
@@ -60,18 +62,37 @@ Decisions:
 ## Proposed Common Model (Draft)
 
 ```
-person:
-  id: primary key (strategy TBD)
+entity_link:                              # pairwise link table (input to cluster resolver)
+  id: uuid
+  entity_type: string                     # person | company | association
+  left_system: string                     # hubspot | tripletex
+  left_id: string
+  right_system: string                    # hubspot | tripletex
+  right_id: string
+  link_source: string                     # deterministic | fuzzy | human
+  confidence: float?
+  created_by: string?
+  created_at: timestamp
+
+entity_cluster_member:                    # resolved cluster memberships (output of cluster resolver)
+  entity_type: string
+  source_system: string
+  source_id: string
+  golden_id: uuid                         # assigned by cluster resolver
+  cluster_version: int                    # incremented on re-resolution
+
+person:                                   # golden record (IVM projection)
+  id: uuid (from entity_cluster_member.golden_id)
   source_hubspot_ids: string[]
   source_tripletex_ids: string[]
   first_name: string
   last_name: string
   email: string?
   phone: string?
-  field_provenance_json: jsonb  # per-field source provenance map
+  field_provenance_json: jsonb
 
-company:
-  id: primary key (strategy TBD)
+company:                                  # golden record (IVM projection)
+  id: uuid (from entity_cluster_member.golden_id)
   source_hubspot_ids: string[]
   source_tripletex_ids: string[]
   name: string
@@ -79,28 +100,33 @@ company:
   address: string?
   city: string?
   country_id: uuid? (FK -> country.id)
-  field_provenance_json: jsonb  # per-field source provenance map
+  field_provenance_json: jsonb
 
 country:
-  id: primary key (strategy TBD)
+  id: uuid
   iso_code: string (e.g. NO, SE)
   canonical_name: string (e.g. Norway, Sweden)
   source_hubspot_values: string[]
   source_tripletex_values: string[]
   is_active: boolean default true
 
-person_company_association:
-  id: primary key (strategy TBD)
+person_company_association:               # golden record (IVM projection)
+  id: uuid (from entity_cluster_member.golden_id)
   person_id: uuid (FK)
   company_id: uuid (FK)
-  relation_type: string?   # employee, billing_contact, owner, etc.
+  relation_type: string?
   source_hubspot_assoc_ids: string[]
   source_tripletex_assoc_ids: string[]
   linkage_provenance_json: jsonb
 ```
 
+Linkage architecture note:
+- All merge decisions flow through `entity_link` (pairwise) → cluster resolver → `entity_cluster_member`.
+- IVM joins staging tables against `entity_cluster_member` to produce golden records; no linkage logic or ID generation inside IVM.
+- `golden_id` in `entity_cluster_member` is stable across re-resolution unless clusters split/merge.
+
 Identity note:
-- `source_hubspot_ids` and `source_tripletex_ids` may contain multiple ids when deterministic linkage resolves duplicates/merges into one canonical record.
+- `source_hubspot_ids` and `source_tripletex_ids` are aggregated from cluster members in IVM.
 
 Association note:
 - Person↔company linkage is represented only in `person_company_association` (no `company_id` on `person`).
@@ -111,36 +137,8 @@ Country note:
 Deletion note:
 - Consumers that need explicit delete markers should use a derived projection/view (for example `deleted_at` inferred from provenance and source presence tables).
 
-## Open Questions
-
-- Primary key strategy for pure IVM:
-  - Option A: deterministic UUID derived from canonical `match_key` in IVM
-    - Pros: all transformation stays in IVM; reproducible ids
-    - Cons: ids change if `match_key` changes
-  - Option B: deterministic text key (`match_key`) as primary key
-    - Pros: simplest pure-IVM approach; no UUID helper function needed
-    - Cons: larger keys and indexes; leaks business-key semantics into PK
-  - Option C: separate stable surrogate id assignment outside IVM
-    - Pros: stable ids even if `match_key` changes
-    - Cons: breaks strict pure-IVM transformation boundary
-
-Option C design sketch (if selected):
-- Creation timing:
-  - Create surrogate ids immediately after deterministic linkage yields canonical `match_key` values for person/company/association.
-  - Run on every ingestion cycle; create only for unseen `(entity_type, match_key)`.
-- Creation mechanism:
-  - Maintain `identity_registry(entity_type, match_key, surrogate_id, created_at, updated_at)`.
-  - Upsert by `(entity_type, match_key)`:
-    - existing row -> reuse `surrogate_id`
-    - missing row -> insert with new surrogate id
-  - Join golden projections to `identity_registry` to expose stable ids.
-- Operational safeguards:
-  - Unique constraint on `(entity_type, match_key)`.
-  - Idempotent upsert and retry-safe execution.
-  - Add remap history table for key evolution (`old_match_key`, `new_match_key`, `changed_at`, `reason`).
-  - One-time backfill of `identity_registry` before enabling live upserts.
-
 ## Related Plans
 
 - [Analytics Views](analytics-views.md)
 - [Reference Mapping](reference-mapping.md)
+- [Linkage & Identity Strategy Analysis](linkage-identity-strategy-analysis.md)
