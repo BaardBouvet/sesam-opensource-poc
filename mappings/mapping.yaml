@@ -1,0 +1,335 @@
+version: "1.0"
+description: >
+  Consolidated OSI mapping for Sesam PoC.
+  Covers person, company, person_company_association, and country vocabulary
+  across HubSpot and Tripletex in a single validator-compatible mapping file.
+
+targets:
+  country:
+    fields:
+      iso_code: identity
+      name_en: coalesce
+      name_no: coalesce
+
+  person:
+    fields:
+      email: identity
+      first_name:
+        strategy: coalesce
+        group: name
+      last_name:
+        strategy: coalesce
+        group: name
+      phone: last_modified
+      address:
+        strategy: coalesce
+        group: addr
+      city:
+        strategy: coalesce
+        group: addr
+      country:
+        strategy: coalesce
+        references: country
+        group: addr
+
+  company:
+    fields:
+      org_number: identity
+      domain:
+        strategy: identity
+        link_group: domain_match
+      name: coalesce
+      phone: last_modified
+      address:
+        strategy: coalesce
+        group: addr
+      city:
+        strategy: coalesce
+        group: addr
+      country:
+        strategy: coalesce
+        references: country
+        group: addr
+
+  person_company_association:
+    fields:
+      person_id:
+        strategy: identity
+        references: person
+        link_group: assoc
+      company_id:
+        strategy: identity
+        references: company
+        link_group: assoc
+      relation_type: coalesce
+
+mappings:
+  - name: country_seed
+    source: { dataset: country_seed }
+    target: country
+    fields:
+      - source: iso_code
+        target: iso_code
+      - source: name_en
+        target: name_en
+        priority: 1
+      - source: name_no
+        target: name_no
+        priority: 1
+
+  - name: hubspot_country
+    source: { dataset: hubspot_country_values }
+    target: country
+    fields:
+      - source: iso_code
+        target: iso_code
+      - source: country_name
+        target: name_en
+        priority: 2
+
+  - name: tripletex_country
+    source: { dataset: tripletex_country_values }
+    target: country
+    fields:
+      - source: iso_code
+        target: iso_code
+      - source: country_name
+        target: name_no
+        priority: 2
+
+  - name: hubspot_contacts
+    source: { dataset: hubspot_contacts }
+    target: person
+    last_modified: lastmodifieddate
+    fields:
+      - source: email
+        target: email
+      - source: firstname
+        target: first_name
+        priority: 1
+      - source: lastname
+        target: last_name
+        priority: 1
+      - source: phone
+        target: phone
+      - source: address
+        target: address
+        priority: 2
+      - source: city
+        target: city
+        priority: 2
+      - source: country
+        target: country
+        priority: 2
+
+  - name: tripletex_contacts
+    source: { dataset: tripletex_contacts }
+    target: person
+    last_modified: last_modified_date
+    fields:
+      - source: email
+        target: email
+      - source: first_name
+        target: first_name
+        priority: 2
+      - source: last_name
+        target: last_name
+        priority: 2
+      - source: phone_number_mobile
+        target: phone
+      - source: address
+        target: address
+        priority: 1
+      - source: city
+        target: city
+        priority: 1
+      - source: country
+        target: country
+        priority: 1
+        expression: "country_name"
+
+  - name: hubspot_companies
+    source: { dataset: hubspot_companies }
+    target: company
+    last_modified: lastmodifieddate
+    fields:
+      - source: org_number
+        target: org_number
+      - source: domain
+        target: domain
+      - source: name
+        target: name
+        priority: 1
+      - source: phone
+        target: phone
+      - source: address
+        target: address
+        priority: 2
+      - source: city
+        target: city
+        priority: 2
+      - source: country
+        target: country
+        priority: 2
+
+  - name: tripletex_customers
+    source: { dataset: tripletex_customers }
+    target: company
+    last_modified: last_modified_date
+    fields:
+      - source: organisation_number
+        target: org_number
+      - source: url
+        target: domain
+        expression: "regexp_replace(url, '^https?://(www\\.)?', '')"
+        reverse_expression: "'https://' || domain"
+      - source: name
+        target: name
+        priority: 2
+      - source: phone_number
+        target: phone
+      - source: postal_address_address
+        target: address
+        priority: 1
+      - source: postal_address_city
+        target: city
+        priority: 1
+      - source: postal_address_country
+        target: country
+        priority: 1
+        expression: "country_name"
+
+  - name: hubspot_associations
+    source: { dataset: hubspot_associations }
+    target: person_company_association
+    fields:
+      - source: contact_id
+        target: person_id
+      - source: company_id
+        target: company_id
+      - source: association_type
+        target: relation_type
+        priority: 1
+
+  - name: tripletex_contact_assoc
+    source: { dataset: tripletex_contacts }
+    target: person_company_association
+    embedded: true
+    filter: "customer_id IS NOT NULL"
+    fields:
+      - source: id
+        target: person_id
+      - source: customer_id
+        target: company_id
+      - target: relation_type
+        expression: "'employee'"
+        direction: forward_only
+        priority: 2
+
+tests:
+  - description: "Canonical country seed round-trip"
+    input:
+      country_seed:
+        - { iso_code: "NO", name_en: "Norway", name_no: "Norge" }
+        - { iso_code: "SE", name_en: "Sweden", name_no: "Sverige" }
+    expected:
+      country_seed:
+        updates:
+          - { iso_code: "NO", name_en: "Norway", name_no: "Norge" }
+          - { iso_code: "SE", name_en: "Sweden", name_no: "Sverige" }
+
+  - description: "HubSpot and Tripletex person/company merge by email and org number"
+    input:
+      country_seed:
+        - { iso_code: "NO", name_en: "Norway", name_no: "Norge" }
+      hubspot_contacts:
+        - hs_object_id: "101"
+          email: "alice@example.com"
+          firstname: "Alice"
+          lastname: "Johnson"
+          phone: "+4712345678"
+          address: "123 Market St"
+          city: "Oslo"
+          country: "Norway"
+          lastmodifieddate: "2026-03-01T10:00:00Z"
+      tripletex_contacts:
+        - id: "5001"
+          email: "alice@example.com"
+          first_name: "Alice M."
+          last_name: "Johnsen"
+          phone_number_mobile: "+4787654321"
+          address: "Storgata 1"
+          city: "Bergen"
+          country: "Norge"
+          country_name: "Norge"
+          customer_id: "7001"
+          last_modified_date: "2026-03-05T14:00:00Z"
+      hubspot_companies:
+        - hs_object_id: "301"
+          org_number: "912345678"
+          domain: "acme.no"
+          name: "Acme AS"
+          phone: "+4722334455"
+          address: "Karl Johans gate 1"
+          city: "Oslo"
+          country: "Norway"
+          lastmodifieddate: "2026-03-01T12:00:00Z"
+      tripletex_customers:
+        - id: "7001"
+          organisation_number: "912345678"
+          url: "https://www.acme.no"
+          name: "ACME AS"
+          phone_number: "+4722334400"
+          postal_address_address: "Stortorvet 5"
+          postal_address_city: "Oslo"
+          postal_address_country: "Norge"
+          country_name: "Norge"
+          last_modified_date: "2026-03-05T09:00:00Z"
+      hubspot_associations:
+        - { contact_id: "101", company_id: "301", association_type: "primary" }
+    expected:
+      hubspot_contacts:
+        updates:
+          - hs_object_id: "101"
+            email: "alice@example.com"
+            firstname: "Alice"
+            lastname: "Johnson"
+            phone: "+4787654321"
+            address: "Storgata 1"
+            city: "Bergen"
+            country: "Norge"
+      tripletex_contacts:
+        updates:
+          - id: "5001"
+            email: "alice@example.com"
+            first_name: "Alice"
+            last_name: "Johnson"
+            phone_number_mobile: "+4787654321"
+            address: "Storgata 1"
+            city: "Bergen"
+            country_name: "Norge"
+            customer_id: "7001"
+      hubspot_companies:
+        updates:
+          - hs_object_id: "301"
+            org_number: "912345678"
+            domain: "acme.no"
+            name: "Acme AS"
+            phone: "+4722334400"
+            address: "Stortorvet 5"
+            city: "Oslo"
+            country: "Norge"
+      tripletex_customers:
+        updates:
+          - id: "7001"
+            organisation_number: "912345678"
+            url: "https://acme.no"
+            name: "Acme AS"
+            phone_number: "+4722334400"
+            postal_address_address: "Stortorvet 5"
+            postal_address_city: "Oslo"
+            postal_address_country: "Norge"
+            country_name: "Norge"
+      hubspot_associations:
+        updates:
+          - { contact_id: "101", company_id: "301", association_type: "primary" }

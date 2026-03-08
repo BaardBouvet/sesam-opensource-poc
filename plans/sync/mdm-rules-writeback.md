@@ -168,7 +168,7 @@ CREATE TABLE sync_state (
 - `last_payload` is a JSONB snapshot of the field values written, using the same keys as the desired-state view produces. This makes comparison straightforward.
 - `target_id` is populated after the first successful create (and also captured in `cross_system_link`).
 - `etag` supports compare-and-swap for systems that expose version tokens.
-- `sync_version` is incremented on each successful write for debugging/audit.
+- `sync_version` is incremented on each successful write. Used as a cheap optimistic lock for local CAS checks (integer comparison instead of JSONB diff) and as an audit counter.
 
 ### 3. Sync Queue View
 
@@ -185,6 +185,7 @@ SELECT
   d.desired_payload,
   s.last_payload,
   s.etag,
+  COALESCE(s.sync_version, 0) AS sync_version,
   CASE
     WHEN s.golden_id IS NULL THEN 'create'
     ELSE 'update'
@@ -206,6 +207,7 @@ SELECT
   NULL AS desired_payload,
   s.last_payload,
   s.etag,
+  s.sync_version,
   'delete' AS action
 FROM sync_state s
 LEFT JOIN desired_state_union d
@@ -228,22 +230,62 @@ FROM person_hubspot_desired d
 ;
 ```
 
-### 4. Write-Back Worker Loop
+### 4. Write-Back Worker
 
-```
-for each row in sync_queue (ordered by entity_type, action priority):
-    if action = 'create':
-        response = target_api.create(desired_payload)
-        INSERT INTO cross_system_link (source_id=golden_id, target_id=response.id, ...)
-        INSERT INTO sync_state (target_id=response.id, last_payload=desired_payload, ...)
-    elif action = 'update':
-        if etag:  verify remote state matches etag (CAS)
-        target_api.update(target_id, changed_fields(desired_payload, last_payload))
-        UPDATE sync_state SET last_payload=desired_payload, etag=response.etag, ...
-    elif action = 'delete':
-        target_api.deactivate_or_delete(target_id)
-        DELETE FROM sync_state WHERE ...
-```
+The worker has two phases: a **dispatcher** that reads `sync_queue` and creates durable `sync_task` rows, and an **executor** that claims tasks, runs CAS checks, and calls target APIs. See [Compare-and-Swap](#compare-and-swap) for the full flow including basis snapshots and pre-write safety checks.
+
+### 5. Write-Back Trigger Strategy (Event-Driven with IVM Lag)
+
+Event-driven write-back should be treated as **event-triggered start + stability gate**, not immediate queue drain. IVM updates can take time to propagate into desired-state/sync views.
+
+#### Trigger Options
+
+- **Option A: Schedule-only polling**
+  - Run worker on fixed cadence (e.g. every 5 minutes).
+  - Simple and robust, but higher latency.
+- **Option B: Pure DB notification (`LISTEN/NOTIFY`)**
+  - Wake worker on notifications from Postgres.
+  - Low latency, but notifications are not durable; missed signals are possible if worker is down.
+- **Option C: Hybrid orchestrator events + scheduled backstop — Recommended**
+  - Trigger worker after upstream jobs complete (ingest/linkage/MDM).
+  - Apply stability gate before draining queue.
+  - Also run periodic schedule as safety net.
+
+#### Stability Gate (adaptive; fast-path first)
+
+Before processing `sync_queue`, the worker checks that data is stable. Use a **fast path** for webhook-driven updates and a **slow path** fallback if stability is uncertain.
+
+**Fast path (default for webhook-triggered runs):**
+
+1. Debounce for **1–2 seconds** after event receipt.
+2. Read queue fingerprint (`count(*)` + hash of `(entity_type, target_system, action)`).
+3. Re-check once after **500–1000 ms**.
+4. If unchanged, start write-back immediately.
+
+**Slow path (fallback):**
+
+- If fingerprint is changing, or upstream signals an in-progress refresh, switch to slower checks:
+  - check every **5 seconds** for up to **60 seconds**;
+  - start as soon as two consecutive samples match;
+  - if still unstable at timeout, process in small batches and re-check between batches.
+
+This keeps best-case latency near real-time while still avoiding races when IVM propagation is briefly behind.
+
+#### Recommended Defaults (Phase 1)
+
+- Primary trigger: webhook/event-driven run after upstream ingest/linkage completion.
+- Gate mode: adaptive fast-path (1–2s debounce) with slow-path fallback.
+- Backstop trigger: schedule every **5 minutes** (recovery for missed events).
+- Optional accelerator: `LISTEN/NOTIFY` as wake-up hint only (never as sole trigger).
+- Concurrency guard: single active write-back worker per target system.
+- Processing mode under instability: batch size **50–100** rows, re-evaluate stability between batches.
+
+#### Why this model
+
+- Achieves near-immediate writes when webhook + IVM propagation is sub-second.
+- Falls back safely when propagation lags or upstream is still mutating state.
+- Preserves correctness because `sync_queue` remains the source of truth.
+- Missed events are recovered by scheduled backstop.
 
 ### Options: JSONB Payload vs Column-Level Comparison
 
@@ -387,16 +429,127 @@ The worker calls `jsonb_diff(desired_payload, last_payload)` to build the minima
 
 ## Compare-and-Swap
 
-To avoid lost writes when MDM rules say "name from HubSpot, phone from Tripletex":
+Between task creation and execution, three things can change:
 
-1. Read current value from target system before write
-2. Verify it matches expected state (from `sync_state.etag` or `sync_state.last_payload`)
-3. If changed externally, re-ingest the fresh data, let the pipeline recompute desired state, and re-diff
-4. Write only if state matches expectations
+- **Local state**: another worker already wrote to the same entity (`sync_state` advanced).
+- **Source data**: a new ingest arrived, changing the golden record / desired state.
+- **Remote state**: someone edited the record directly in the target system.
 
-Both HubSpot and Tripletex support conditional updates or at least return current state on read.
+The CAS model pins a basis snapshot at task creation, then verifies all three before writing.
 
-The `sync_state.etag` column stores the target system's version token (if available) so the CAS check can happen without an extra API read when the target supports conditional writes (e.g. `If-Match` header).
+### Task Table (`sync_task`)
+
+The dispatcher materializes `sync_queue` candidates into durable tasks with pinned basis state:
+
+```sql
+CREATE TABLE sync_task (
+  task_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  entity_type     TEXT NOT NULL,
+  target_system   TEXT NOT NULL,
+  golden_id       UUID NOT NULL,
+  action          TEXT NOT NULL,                    -- create | update | delete
+  basis_version   BIGINT NOT NULL,                  -- sync_state.sync_version at task creation
+  basis_payload   JSONB NOT NULL,                   -- sync_state.last_payload at task creation
+  basis_etag      TEXT,                             -- sync_state.etag at task creation
+  source_version  BIGINT NOT NULL,                  -- source projection watermark at task creation
+  desired_payload JSONB,                            -- target desired state at task creation
+  patch_payload   JSONB,                            -- jsonb_diff(desired, basis) — updates only
+  status          TEXT NOT NULL DEFAULT 'pending',  -- pending | in_progress | done | stale | failed
+  attempts        INT NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- At most one active task per entity per target
+CREATE UNIQUE INDEX sync_task_active_idx
+  ON sync_task (entity_type, target_system, golden_id)
+  WHERE status IN ('pending', 'in_progress');
+```
+
+**Column roles:**
+
+| Column | Purpose |
+|--------|---------|
+| `basis_version` | Local CAS: cheap integer check against `sync_state.sync_version`. If version advanced, another write landed and this task is stale. No JSONB parsing needed. |
+| `basis_payload` | Remote CAS: compared against current target state via read-before-write. Also serves as audit trail. |
+| `basis_etag` | Remote CAS: sent as `If-Match` header when target supports conditional writes. |
+| `source_version` | Source freshness: compared against current projection watermark. If watermark advanced, `desired_payload` was computed from stale data. |
+| `desired_payload` | The full managed-field payload the target should have after this write. |
+| `patch_payload` | Only the changed fields (for PATCH endpoints). `jsonb_diff(desired, basis)`. |
+
+`source_version` should come from a deterministic watermark — e.g. ingestion run id, max source cursor, or a monotonic projection sequence.
+
+### Dispatcher
+
+The dispatcher reads `sync_queue` (a computed view of diff candidates) and inserts tasks. It does **not** re-join `sync_state` — the view already exposes `sync_version`, `last_payload`, and `etag`.
+
+```sql
+INSERT INTO sync_task (
+  entity_type, target_system, golden_id, action,
+  basis_version, basis_payload, basis_etag,
+  source_version,
+  desired_payload, patch_payload
+)
+SELECT
+  q.entity_type, q.target_system, q.golden_id, q.action,
+  q.sync_version,
+  COALESCE(q.last_payload, '{}'::jsonb),
+  q.etag,
+  current_source_version(),                 -- function/subquery returning current watermark
+  q.desired_payload,
+  CASE WHEN q.action = 'update'
+       THEN jsonb_diff(q.desired_payload, COALESCE(q.last_payload, '{}'::jsonb))
+       ELSE q.desired_payload
+  END
+FROM sync_queue q
+ON CONFLICT DO NOTHING;                     -- partial unique index prevents duplicates
+```
+
+### Pre-Write Checks
+
+Before executing an API write, the executor runs three checks in order. Any failure marks the task `stale`.
+
+**1. Local check — has another write landed?**
+
+Compare `sync_state.sync_version` against `task.basis_version` (integer comparison). If `sync_version` advanced, another write already updated the target — this task is stale. For `create` tasks (no prior `sync_state` row), `basis_version = 0`; a newly appearing row means another task already created the record.
+
+**2. Source check — has the golden record changed?**
+
+Compare the current source projection watermark against `task.source_version`. If the watermark advanced, the `desired_payload` was computed from stale source data.
+
+**3. Remote check — has someone edited the target directly?**
+
+- Target supports conditional writes → send `If-Match: basis_etag`.
+- Target lacks conditional writes → read current managed fields, compare to `basis_payload`.
+
+On remote mismatch: mark task `stale`, trigger re-ingest to capture the external change.
+
+### Worker Flow
+
+```
+1. Dispatcher: read sync_queue → INSERT sync_task (skip on conflict)
+2. Executor:   claim task (SELECT ... FOR UPDATE SKIP LOCKED → status = 'in_progress')
+3. Local check:   sync_state.sync_version == task.basis_version?       → stale if no
+4. Source check:  current watermark == task.source_version?             → stale if no
+5. Remote check:  etag/read-compare against basis?                     → stale if no
+6. API write:     POST (create) | PATCH (update) | DELETE/deactivate
+7. On success:
+     UPDATE sync_state SET last_payload = desired_payload,
+                           etag = response_etag,
+                           sync_version = sync_version + 1
+     Mark task 'done'
+     For creates → INSERT cross_system_link
+8. On stale (3–5): mark task 'stale', discard — sync_queue will produce
+     a fresh candidate on next cycle if the diff still exists
+9. On transient API error: increment attempts, backoff, retry same task
+```
+
+### Design Notes
+
+- Stale tasks are cheap to discard. `sync_queue` recomputes the full diff each cycle, so a fresh task will appear if the change is still relevant.
+- `basis_payload` is persisted for remote CAS and audit, not for local CAS (the version check is sufficient and cheaper).
+- `desired_payload` is pinned at task creation. If desired state changes before execution, the source check catches the staleness.
+- Both HubSpot and Tripletex support reading current state; HubSpot returns `updatedAt` for version comparison.
+- `sync_state.etag` stores the target's version token so remote CAS can skip an extra API read when conditional writes are supported.
 
 ## Deletion Propagation Policy (Phase 1)
 

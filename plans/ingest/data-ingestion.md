@@ -73,6 +73,18 @@ Contact→company associations are core and must be ingested as first-class data
 
 `dlt` note: dlt supports incremental extraction and merge loading, but generic REST delete detection is source-dependent. If API/webhook does not emit delete signals, snapshot-diff + verification is required.
 
+## dlt Strategy for Verification Features
+
+Delete verification and tombstone policy are implemented outside dlt as a post-ingestion control layer.
+
+| Path | Benefits | Costs/Risks | Decision |
+|------|----------|-------------|----------|
+| Internal extension around dlt runs | Keeps ingestion simple; fast implementation; easy dlt upgrades | Maintain custom verification module | **Use in Phase 1** |
+| Upstream generic helpers to dlt | Lower long-term glue if generic | Slower delivery; contribution overhead | Use selectively after proving generic value |
+| Fork dlt | Full control | High maintenance and upgrade drift | Do not use in Phase 1 |
+
+This keeps dlt focused on extraction/loading while our verification logic remains explicit in [Deletion Tracking & Verification](deletion-tracking.md).
+
 ## Related Plans
 
 - [Webhooks](webhooks.md)

@@ -9,12 +9,19 @@ A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Triplet
 | [ADR-001](adrs/001-python-stack.md) | Python as primary language |
 | [ADR-002](adrs/002-postgresql-storage.md) | PostgreSQL as primary storage |
 | [ADR-003](adrs/003-deployment-strategy.md) | Skaffold + Testcontainers + Devcontainers |
+| [ADR-004](adrs/004-osi-mapping-spec.md) | OSI Mapping Schema for model & mappings (experimental) |
 
 ## API Artifacts in Repository
 
 - Tripletex OpenAPI snapshot: `specs/tripletex/openapi.json`
 - Tripletex webhook reference: `specs/tripletex/webhook-reference.md`
 - HubSpot required API docs index: `specs/hubspot/required-api-docs.md`
+
+## Integration Mappings (Experimental)
+
+Declarative mapping files using the [OSI Mapping Schema](https://github.com/BaardBouvet/OSI-mapping): [`mappings/`](../mappings/README.md)
+
+Covers person, company, association, and country vocabulary — including resolution strategies, cross-system FK references, and inline test cases. See [ADR-004](adrs/004-osi-mapping-spec.md).
 
 ## Naming Conventions
 
