@@ -1,0 +1,38 @@
+{
+  "name": "sesam-opensource-poc",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "PG_TRICKLE_VERSION": "0.9.0"
+    }
+  },
+  "overrideCommand": false,
+  "workspaceFolder": "/workspaces/sesam-opensource-poc",
+  "remoteUser": "vscode",
+  "forwardPorts": [5432],
+  "mounts": [
+    "source=sesam-opensource-poc-pgroot,target=/var/lib/postgresql,type=volume"
+  ],
+  "containerEnv": {
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_DB": "postgres"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "PGHOST": "localhost",
+    "PGPORT": "5432",
+    "PGUSER": "postgres",
+    "PGPASSWORD": "postgres",
+    "PGDATABASE": "postgres"
+  }
+}
