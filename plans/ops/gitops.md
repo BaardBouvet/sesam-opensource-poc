@@ -14,25 +14,47 @@ Deploy in-and-out connector configs, OSI-mapping files, and service workloads vi
 
 ## Decision: ArgoCD + Kustomize
 
-### GitOps Operator — ArgoCD
+### GitOps Operator — ArgoCD (vs FluxCD)
 
-ArgoCD watches Git repositories and continuously reconciles the desired state declared in Git with the live state in Kubernetes. It fits this stack well because:
+ArgoCD watches Git repositories and continuously reconciles the desired state declared in Git with the live state in Kubernetes.
+
+| Dimension | ArgoCD | FluxCD |
+|---|---|---|
+| **UI** | Full web UI with sync status, diff view, rollback | CLI-first; web UI via Weave GitOps (separate install) |
+| **Mental model** | `Application` CRs — explicit, operator-managed apps | Source + Kustomization CRs — more composable, more verbose |
+| **Kustomize** | First-class, built-in | First-class, built-in |
+| **Validation hooks** | PreSync/PostSync hooks as K8s Jobs — fits validation gates naturally | Uses `dependsOn` + health checks, no dedicated pre-sync Job concept |
+| **RBAC** | Built-in multi-tenant RBAC in ArgoCD server | Relies on K8s RBAC directly — less centralized |
+| **Rollback UX** | One click in UI / one `argocd app rollback` command | Git revert → push → wait for reconciliation |
+| **Secret management** | Delegates to ESO/Sealed Secrets/SOPS | Same; also has native SOPS decryption support |
+
+ArgoCD is chosen because:
 
 - Both [in-and-out](https://github.com/grove/in-and-out) connectors and [OSI-mapping](https://github.com/BaardBouvet/OSI-mapping) configs are **fully declarative YAML** — a natural fit for Git-driven deployment
-- ArgoCD provides a web UI showing sync status, diff visualization, and rollback — useful for operators who need to see which connector version is deployed where
-- Native support for Kustomize overlays, Helm charts, and plain manifests
+- The **PreSync hook model** maps directly to our validation gate requirements (validate connectors and compile mappings before allowing sync). FluxCD has no direct equivalent — validation would be limited to CI only, losing the in-cluster pre-deploy safety net.
+- **Rollback** for mapping changes that alter SQL views is one command (`argocd app rollback`) vs git-revert-push-wait in FluxCD
+- The **web UI** provides immediate value for a small team — seeing which connector version is live in staging vs production at a glance
 - Application-of-applications pattern scales cleanly as we add more connectors and targets
-- Health checks and sync hooks enable pre-deploy validation steps
-- Widely adopted with strong community; more operator-friendly UI than Flux
+- FluxCD's advantage (native SOPS decryption) can be matched in ArgoCD with a SOPS plugin
 
-### Overlay Mechanism — Kustomize
+### Overlay Mechanism — Kustomize (vs Helm)
 
 Kustomize is preferred over Helm for this project because:
 
 - Connector and mapping configs are plain YAML files, not parameterized templates — Kustomize patches are a more natural fit than Go templates
-- Lower complexity: no chart packaging, no Tiller history
+- Lower complexity: no chart packaging, no Tiller history, no `_helpers.tpl`
 - Skaffold already supports Kustomize as a renderer ([ADR-003](../adrs/003-deployment-strategy.md))
 - Per-environment variations are small (credentials, polling intervals, API base URLs) — strategic merge patches handle these cleanly
+
+#### Why not Helm for release management?
+
+Helm's release history (`helm history`) and `values.yaml`-per-environment model look appealing for versioning, but:
+
+- **ArgoCD already provides release history** — `argocd app history` gives timestamped sync log with exact Git revisions, who triggered it, and success/failure. Helm's release history would be redundant.
+- **Helm treats a chart as an atomic release.** This project has three artifact types that need to be promoted independently (images, connector configs, mapping configs). Bundling all three in one Helm chart muddies the audit trail — bumping an image tag creates a new release revision that also "touches" connector and mapping config. Splitting into three charts adds coordination overhead without payoff.
+- **Kustomize's model** — each file in Git is its own change — maps cleanly to independent promotion of the three artifact types.
+
+The only scenario that would warrant Helm is distributing the deployment as a reusable package for external users to install. That doesn't apply here.
 
 ## Repository Layout
 
@@ -181,15 +203,88 @@ in-and-out connector files reference secrets via environment variables or K8s Se
 4. Compile passes → ArgoCD applies new ConfigMap + triggers mapping apply Job
 5. Job runs `create-tables` → pg_trickle stream tables rebuild → ArgoCD post-sync health check
 
+## Release Management
+
+Three distinct artifact types, each with different release and versioning mechanics:
+
+| Artifact | What changes | How versioned | Promotion mechanism |
+|---|---|---|---|
+| **Container images** | in-and-out service code, OSI-mapping engine | Immutable image tag (e.g. `ghcr.io/grove/inandout:0.4.2`) pinned in the Kustomize base | Bump `newTag` in a PR |
+| **Connector configs** | `hubspot.yaml`, `tripletex.yaml` in ConfigMap | Git commit SHA — no separate versioning | Direct file edit in a PR |
+| **Mapping configs** | `mapping.yaml` in ConfigMap | Git commit SHA + schema compilation step | Direct file edit in a PR |
+
+These can and should be promoted **independently**. A connector polling interval change doesn't require a new image build.
+
+### Image Upgrades
+
+GitHub Actions builds images and pushes to GHCR on every tagged release. The PR that bumps the tag in Kustomize is the release PR:
+
+```yaml
+# deploy/base/kustomization.yaml
+images:
+  - name: ghcr.io/grove/inandout
+    newTag: 0.4.2          # ← bump this in a PR
+```
+
+For fully automated image promotion, **ArgoCD Image Updater** can watch GHCR and commit tag bumps automatically when a new tag matching a semver policy appears (e.g. `>= 0.4.0, < 0.5.0`).
+
+### Connector Config Releases
+
+Pure Git workflow — no image involved:
+1. Edit `configmap-connectors.yaml` or the overlay patch
+2. PR → CI validates connector schema
+3. Merge → ArgoCD PreSync hook validates in-cluster → ConfigMap applied
+4. in-and-out supports **runtime config reload** (pause, resume, reconfigure without restarting), so connector changes may not need a pod restart
+
+### Mapping Releases
+
+More consequential — a mapping change rebuilds SQL views:
+1. Edit `configmap-mappings.yaml`
+2. PR → CI runs OSI-mapping `validate` (11 passes)
+3. Merge → ArgoCD PreSync Job: `validate` + `create-tables --dry-run`
+4. Sync wave 1: apply new ConfigMap
+5. Sync wave 2: run `create-tables` Job against the live database
+6. Post-sync: pg_trickle `health_check()` confirms stream tables rebuilt cleanly
+
+**Schema compatibility:** The OSI-mapping engine classifies changes as additive (new fields), compatible (field rename with alias), or breaking (removed identity field). Breaking changes should be gated manually even in staging — use `argocd app sync --dry-run` to review.
+
+## Rollout
+
+ArgoCD itself doesn't do canary/blue-green — that's handled at the K8s layer or by the application:
+
+- **in-and-out**: Stateless (state lives in PostgreSQL), so running old and new pods simultaneously during a rolling update is safe. Standard Kubernetes `RollingUpdate` strategy works cleanly.
+- **Mapping changes**: Not rolling — a mapping apply Job either succeeds or fails atomically. There's no half-applied mapping. Previous views remain intact until the Job succeeds.
+- **pg_trickle**: CloudNativePG handles Postgres upgrades; out of scope for ArgoCD rollout.
+
 ## Rollback
 
-ArgoCD maintains a history of every sync. To rollback:
+### Config rollback (connector or mapping change)
 
-- **UI**: Click the previous successful sync revision → "Rollback"
-- **CLI**: `argocd app rollback <app-name>`
-- **Git revert**: Revert the commit in Git — ArgoCD auto-syncs to the previous state
+```bash
+# See history
+argocd app history sesam-production
 
-For mapping changes that alter SQL views, the rollback Job re-applies the previous mapping version, which regenerates the views.
+# Rollback to previous sync
+argocd app rollback sesam-production <revision-id>
+```
+
+ArgoCD re-applies the exact YAML from the previous Git revision. For mapping configs, this triggers the mapping apply Job with the old version, recreating the previous SQL views. This is the **fastest path** — no git revert needed.
+
+Alternatively: `git revert <sha>` + push → ArgoCD auto-syncs (preferred for auditability in production).
+
+### Image rollback
+
+Revert the tag-bump commit in Git, or select the previous history entry in ArgoCD UI → Rollback.
+
+### Mapping rollback with data implications
+
+If a mapping change altered **identity fields** (changing how records link), rolling back the views doesn't undo already-merged golden records in PostgreSQL. Recovery requires:
+
+1. Roll back the mapping (views revert)
+2. Re-run the OSI-mapping engine to recompute golden records from staging tables
+3. Re-run any write-back that went out based on the incorrect merge results
+
+This is a **destructive-ish operation** and the reason breaking mapping changes should require **manual approval** in ArgoCD production sync policy. Mitigation: keep staging data a close replica of production to catch bad merges before they reach prod.
 
 ## Open Questions
 
