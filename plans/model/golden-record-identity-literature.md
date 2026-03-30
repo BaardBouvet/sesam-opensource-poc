@@ -6,7 +6,7 @@ A survey of academic and practitioner literature on the problem of assigning and
 
 When multiple source records are linked into a single golden record (cluster), the cluster needs an identity. This identity must be usable by downstream consumers (BI dashboards, APIs, write-back pipelines) and must behave predictably when the cluster's membership changes (records added, removed, or clusters split/merged). The choice between **persistent surrogates** and **derived/transient identifiers** is a fundamental architectural decision with significant downstream consequences.
 
-See [linkage-identity-strategy-analysis.md](../plans/model/linkage-identity-strategy-analysis.md) for how these options map to our system design.
+See [linkage-identity-strategy-analysis.md](linkage-identity-strategy-analysis.md) for how these options map to our system design.
 
 ---
 

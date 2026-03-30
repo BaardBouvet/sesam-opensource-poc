@@ -19,7 +19,7 @@ A PoC for collecting contacts and companies from **HubSpot** (CRM) and **Triplet
 
 ## Integration Mappings (Experimental)
 
-Declarative mapping files using the [OSI Mapping Schema](https://github.com/BaardBouvet/OSI-mapping): [`mappings/`](../mappings/README.md)
+Declarative mapping files using the [OSI Mapping Schema](https://github.com/BaardBouvet/OSI-mapping): [`mapping.yaml`](../mapping.yaml)
 
 Covers person, company, association, and country vocabulary — including resolution strategies, cross-system FK references, and inline test cases. See [ADR-004](adrs/004-osi-mapping-spec.md).
 

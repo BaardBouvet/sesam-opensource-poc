@@ -1,6 +1,7 @@
-# ConfigMap for in-and-out engine configs and the OSI mapping spec.
-# Connector YAMLs (hubspot.yaml, tripletex.yaml) are loaded from the connectors/
-# directory on disk — managed by the connectors-configmap below.
+# ConfigMap for in-and-out engine configs.
+# Connector YAMLs (hubspot.yaml, tripletex.yaml) live in connectors/ at the
+# repo root and are injected as the inandout-connectors ConfigMap via
+# kustomization.yaml configMapGenerator.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -38,75 +39,3 @@ data:
         enabled: true
       tracing:
         enabled: false
----
-# Connector YAMLs — one per external system.
-# Replace the placeholder content with the real connector definitions once
-# the connectors/ directory is populated (see plans/example-setup.md G4/G5).
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: inandout-connectors
-  namespace: sesam-poc
-data:
-  hubspot.yaml: |
-    schema_version: 1
-    connector:
-      name: hubspot
-      system: HubSpot CRM
-      generation_profile: full_duplex
-      api_version: "v3"
-      connection:
-        base_url: http://inandout-simulator:6100/hubspot
-      auth:
-        type: api_key
-        credential_ref: hubspot_api_key
-        api_key:
-          location: header
-          name: Authorization
-      datatypes:
-        contacts:
-          ingestion:
-            primary_key: id
-            history_mode: overwrite
-            schedule:
-              interval: "5m"
-            list:
-              method: GET
-              path: /contacts
-              record_selector: results
-              pagination:
-                strategy: cursor
-                cursor:
-                  request_param: after
-                  response_path: paging.next.after
-  tripletex.yaml: |
-    schema_version: 1
-    connector:
-      name: tripletex
-      system: Tripletex
-      generation_profile: full_duplex
-      api_version: "v2"
-      connection:
-        base_url: http://inandout-simulator:6100/tripletex
-      auth:
-        type: api_key
-        credential_ref: tripletex_api_key
-        api_key:
-          location: header
-          name: Authorization
-      datatypes:
-        customers:
-          ingestion:
-            primary_key: id
-            history_mode: overwrite
-            schedule:
-              interval: "5m"
-            list:
-              method: GET
-              path: /customers
-              record_selector: values
-              pagination:
-                strategy: cursor
-                cursor:
-                  request_param: from
-                  response_path: paging.next.from

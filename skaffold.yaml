@@ -48,7 +48,14 @@ manifests:
 
 deploy:
   kubeContext: kind-sesam-poc   # kind cluster created by `just cluster-create`
-  kubectl: {}
+  kubectl:
+    hooks:
+      before:
+        # Jobs are immutable after creation — delete the migrate Job before
+        # each deploy so Kubernetes can create it fresh.
+        - host:
+            command: ["kubectl", "delete", "job", "sesam-migrate",
+                      "-n", "sesam-poc", "--ignore-not-found"]
 
 # Port-forward from the kind cluster to localhost inside the devcontainer.
 portForward:

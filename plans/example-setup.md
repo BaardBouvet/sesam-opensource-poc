@@ -16,7 +16,7 @@ Build a working end-to-end example that syncs **companies**, **contacts**, and t
 | 2 | `connectors/tripletex.yaml` | in-and-out | Needs expansion | Tripletex connector — contacts, customers (incl. incremental contacts) |
 | 3 | `mapping.yaml` | OSI-mapping / this repo | Mostly done | Single mapping file covering all entities + tests |
 
-The existing `*.example.yaml` connectors in [in-and-out/connectors/](https://github.com/grove/in-and-out/tree/main/connectors) are **stubs that need material expansion** — missing association writeback, incremental contact ingestion, and seed data alignment. The mapping in [mappings/mapping.yaml](../mappings/mapping.yaml) covers the scenario structurally but needs validation against real in-and-out table schemas.
+The existing `*.example.yaml` connectors in [in-and-out/connectors/](https://github.com/grove/in-and-out/tree/main/connectors) are **stubs that need material expansion** — missing association writeback, incremental contact ingestion, and seed data alignment. The mapping in [mapping.yaml](../mapping.yaml) covers the scenario structurally but needs validation against real in-and-out table schemas.
 
 ## Architecture
 
@@ -131,7 +131,7 @@ The simulators must produce data that exercises the **merge, create-in-other-sys
 
 ### Phase 2: OSI-Mapping Config
 
-The existing `mappings/mapping.yaml` defines the correct entity structure. It does **not** need a `country` target or `country_seed` source for the initial example — that was scaffolded for future reference-data vocabulary mapping (e.g. Tripletex "Norge" ↔ HubSpot "Norway" ↔ ISO "NO"). We can drop it from the example and add it later if/when we need country normalization.
+The existing `mapping.yaml` defines the correct entity structure. It does **not** need a `country` target or `country_seed` source for the initial example — that was scaffolded for future reference-data vocabulary mapping (e.g. Tripletex "Norge" ↔ HubSpot "Norway" ↔ ISO "NO"). We can drop it from the example and add it later if/when we need country normalization.
 
 **Simplified targets for the example:**
 - `person` — merged contacts (identity: `email`)
