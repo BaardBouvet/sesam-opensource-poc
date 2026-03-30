@@ -24,5 +24,31 @@ patches:
     target:
       kind: Deployment
 
+  # Point connectors at the local simulator instead of production APIs.
+  # The engine reads INOUT_<NAME>_BASE_URL and prefers it over connector.connection.base_url.
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: INOUT_HUBSPOT_BASE_URL
+            value: "http://inandout-simulator:6100/hubspot"
+          - name: INOUT_TRIPLETEX_BASE_URL
+            value: "http://inandout-simulator:6100/tripletex"
+    target:
+      kind: Deployment
+      name: inandout-ingest
+
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: INOUT_HUBSPOT_BASE_URL
+            value: "http://inandout-simulator:6100/hubspot"
+          - name: INOUT_TRIPLETEX_BASE_URL
+            value: "http://inandout-simulator:6100/tripletex"
+    target:
+      kind: Deployment
+      name: inandout-writeback
+
 # Direct postgres access is handled by `skaffold dev` portForward rules
 # (localhost:5432 → pod port 5432) — no NodePort needed in dev.

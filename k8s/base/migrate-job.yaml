@@ -56,7 +56,8 @@ spec:
         - name: db-upgrade
           image: inandout-engine:latest
           imagePullPolicy: IfNotPresent
-          command: ["inandout", "db", "upgrade", "--config", "/config/ingestion.yaml"]
+          command:
+            ["inandout", "db", "upgrade", "--config", "/config/ingestion.yaml"]
           envFrom:
             - secretRef:
                 name: sesam-credentials
@@ -77,7 +78,8 @@ spec:
                 sleep 2
               done
               echo "Applying pg_trickle stream-table SQL..."
-              psql "$INOUT_DATABASE_URL" -f /shared/pgtrickle.sql
+              set -e
+              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -f /shared/pgtrickle.sql
               echo "Migration complete."
           envFrom:
             - secretRef:
