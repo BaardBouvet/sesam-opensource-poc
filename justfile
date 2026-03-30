@@ -54,6 +54,17 @@ redeploy:
     kubectl delete namespace {{NAMESPACE}} --ignore-not-found=true --wait=true
     skaffold run --kubeconfig=$HOME/.kube/config --cache-artifacts=false
 
+# Forward all service ports to localhost (VS Code will expose them to the host)
+# simulator: http://localhost:6100  ingest: http://localhost:9090
+# writeback: http://localhost:9091  postgres: localhost:5432
+[group('dev')]
+forward:
+    kubectl -n {{NAMESPACE}} port-forward svc/inandout-simulator 6100:6100 &
+    kubectl -n {{NAMESPACE}} port-forward svc/inandout-ingest    9090:9090 &
+    kubectl -n {{NAMESPACE}} port-forward svc/inandout-writeback 9091:9091 &
+    kubectl -n {{NAMESPACE}} port-forward statefulset/postgres   5432:5432 &
+    wait
+
 # Tear down all deployed resources
 [group('dev')]
 undeploy:
