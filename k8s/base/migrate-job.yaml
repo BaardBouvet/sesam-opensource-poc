@@ -47,6 +47,7 @@ spec:
             - python3
             - /usr/local/bin/convert_matviews_to_pgtrickle.py
             - /shared/matviews.sql
+            - -o
             - /shared/pgtrickle.sql
           volumeMounts:
             - name: shared

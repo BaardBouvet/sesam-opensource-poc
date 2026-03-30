@@ -39,18 +39,6 @@ data:
       tracing:
         enabled: false
 ---
-# OSI mapping definition — rendered to SQL by the migrate job.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: osi-mapping-config
-  namespace: sesam-poc
-data:
-  mapping.yaml: |
-    # Contents synced from mappings/mapping.yaml at deploy time.
-    # The migrate-job mounts this and runs osi-engine render against it.
-    # See mappings/mapping.yaml for the full source of truth.
----
 # Connector YAMLs — one per external system.
 # Replace the placeholder content with the real connector definitions once
 # the connectors/ directory is populated (see plans/example-setup.md G4/G5).

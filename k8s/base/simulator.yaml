@@ -42,7 +42,7 @@ spec:
               cpu: "250m"
           readinessProbe:
             httpGet:
-              path: /health
+              path: /hubspot/contacts
               port: 6100
             initialDelaySeconds: 5
             periodSeconds: 10

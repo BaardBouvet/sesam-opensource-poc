@@ -37,14 +37,22 @@ py-deps:
 # ── Development loop ──────────────────────────────────────────────────────────
 
 # Start Skaffold in watch mode — rebuilds + redeploys on source changes
+# --cache-artifacts=false: skips Docker Hub manifest fetch for cache hashing
+# (avoids "TOOMANYREQUESTS" rate-limit hangs when base images aren't cached locally)
 [group('dev')]
 dev:
-    skaffold dev --kubeconfig=$HOME/.kube/config
+    skaffold dev --kubeconfig=$HOME/.kube/config --cache-artifacts=false
 
 # One-shot build + deploy (no watch)
 [group('dev')]
 deploy:
-    skaffold run --kubeconfig=$HOME/.kube/config
+    skaffold run --kubeconfig=$HOME/.kube/config --cache-artifacts=false
+
+# Tear down namespace, then redeploy from scratch
+[group('dev')]
+redeploy:
+    kubectl delete namespace {{NAMESPACE}} --ignore-not-found=true --wait=true
+    skaffold run --kubeconfig=$HOME/.kube/config --cache-artifacts=false
 
 # Tear down all deployed resources
 [group('dev')]

@@ -43,6 +43,8 @@ manifests:
   kustomize:
     paths:
       - k8s/overlays/dev
+    buildArgs:
+      - --load-restrictor=LoadRestrictionsNone
 
 deploy:
   kubeContext: kind-sesam-poc   # kind cluster created by `just cluster-create`

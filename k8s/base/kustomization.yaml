@@ -13,6 +13,17 @@ resources:
   - writeback.yaml
   - simulator.yaml
 
+# Generate the OSI-mapping ConfigMap directly from the source file.
+# Requires --load-restrictor=LoadRestrictionsNone (set in skaffold.yaml buildArgs)
+# so kustomize can read a file above the k8s/ directory.
+configMapGenerator:
+  - name: osi-mapping-config
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - mapping.yaml=../../mappings/mapping.yaml
+
 commonLabels:
   app.kubernetes.io/part-of: sesam-poc
   app.kubernetes.io/managed-by: kustomize
