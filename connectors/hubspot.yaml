@@ -265,9 +265,8 @@ connector:
       simulator:
         seed_count: 3
         seed_data:
-          - id: "3001"
-            from:
-              id: "1001"
+          - fromObjectId: "1001"
+            toObjectId: "2001"
             to:
               - id: "2001"
                 type: contact_to_company
