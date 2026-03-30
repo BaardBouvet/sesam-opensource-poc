@@ -2,18 +2,25 @@ version: "1.0"
 description: >
   OSI mapping for the HubSpot ↔ Tripletex two-way sync PoC.
   Covers person, company, and person_company_association.
+  Sources point at in-and-out inout_src_* tables; fields are accessed
+  via source_path into the data jsonb column (e.g. source_path: data.properties.firstname).
 
 sources:
   hubspot_contacts:
-    primary_key: hs_object_id
+    primary_key: external_id
+    table: inout_src_hubspot_contacts
   tripletex_contacts:
-    primary_key: id
+    primary_key: external_id
+    table: inout_src_tripletex_contacts
   hubspot_companies:
-    primary_key: hs_object_id
+    primary_key: external_id
+    table: inout_src_hubspot_companies
   tripletex_customers:
-    primary_key: id
+    primary_key: external_id
+    table: inout_src_tripletex_customers
   hubspot_associations:
-    primary_key: [contact_id, company_id]
+    primary_key: external_id
+    table: inout_src_hubspot_contacts_companies_associations
 
 targets:
   person:
@@ -64,88 +71,68 @@ mappings:
   - name: hubspot_contacts
     source: hubspot_contacts
     target: person
-    last_modified: lastmodifieddate
+    last_modified:
+      expression: "data->'properties'->>'lastmodifieddate'"
     fields:
-      - source: email
+      - source_path: data.properties.email
         target: email
-      - source: firstname
+      - source_path: data.properties.firstname
         target: first_name
         priority: 1
-      - source: lastname
+      - source_path: data.properties.lastname
         target: last_name
         priority: 1
-      - source: phone
+      - source_path: data.properties.phone
         target: phone
-      - source: address
-        target: address
-        priority: 2
-      - source: city
-        target: city
-        priority: 2
 
   - name: tripletex_contacts
     source: tripletex_contacts
     target: person
-    last_modified: last_modified_date
+    last_modified:
+      expression: "data->>'changesUntil'"
     fields:
-      - source: email
+      - source_path: data.email
         target: email
-      - source: first_name
+      - source_path: data.firstName
         target: first_name
         priority: 2
-      - source: last_name
+      - source_path: data.lastName
         target: last_name
         priority: 2
-      - source: phone_number_mobile
+      - source_path: data.phoneNumberMobile
         target: phone
-      - source: address
-        target: address
-        priority: 1
-      - source: city
-        target: city
-        priority: 1
 
   - name: hubspot_companies
     source: hubspot_companies
     target: company
-    last_modified: lastmodifieddate
+    last_modified:
+      expression: "data->'properties'->>'lastmodifieddate'"
     fields:
-      - source: org_number
-        target: org_number
-      - source: domain
+      - source_path: data.properties.domain
         target: domain
-      - source: name
+      - source_path: data.properties.name
         target: name
         priority: 1
-      - source: phone
+      - source_path: data.properties.phone
         target: phone
-      - source: address
-        target: address
-        priority: 2
-      - source: city
-        target: city
-        priority: 2
 
   - name: tripletex_customers
     source: tripletex_customers
     target: company
-    last_modified: last_modified_date
+    last_modified:
+      expression: "data->>'changesUntil'"
     fields:
-      - source: organisation_number
+      - source_path: data.organizationNumber
         target: org_number
-      - source: url
-        target: domain
-        expression: "regexp_replace(url, '^https?://(www\\.)?', '')"
-        reverse_expression: "'https://' || domain"
-      - source: name
+      - source_path: data.name
         target: name
         priority: 2
-      - source: phone_number
+      - source_path: data.phoneNumber
         target: phone
-      - source: postal_address_address
+      - source_path: data.deliveryAddress.addressLine1
         target: address
         priority: 1
-      - source: postal_address_city
+      - source_path: data.deliveryAddress.city
         target: city
         priority: 1
 
@@ -153,22 +140,23 @@ mappings:
     source: hubspot_associations
     target: person_company_association
     fields:
-      - source: contact_id
+      - source_path: data.fromObjectId
         target: person_id
-      - source: company_id
+      - expression: "(data->'to'->0->>'id')"
         target: company_id
-      - source: association_type
+      - expression: "(data->'to'->0->>'type')"
         target: relation_type
         priority: 1
 
   - name: tripletex_contact_assoc
-    source: tripletex_contacts
+    parent: tripletex_contacts
     target: person_company_association
-    filter: "customer_id IS NOT NULL"
+    filter: "data->>'customer' IS NOT NULL"
     fields:
-      - source: id
+      - source: external_id
         target: person_id
-      - source: customer_id
+        direction: forward_only
+      - expression: "(data->'customer'->>'id')"
         target: company_id
       - target: relation_type
         expression: "'employee'"

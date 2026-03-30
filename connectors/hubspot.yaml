@@ -130,6 +130,7 @@ connector:
       writeback:
         protection_level: 2
         conflict_resolution: last_writer_wins
+        use_desired_state_table: true
         supported_actions:
           - update
         operations:
@@ -201,6 +202,7 @@ connector:
       writeback:
         protection_level: 2
         conflict_resolution: last_writer_wins
+        use_desired_state_table: true
         supported_actions:
           - update
         operations:
