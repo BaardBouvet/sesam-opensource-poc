@@ -181,43 +181,181 @@ With IMMEDIATE mode, the stream tables update within the same transaction as the
 
 ### Phase 4: Deployment & Runtime
 
-#### Decision: Docker Compose for the Example
+#### Decision: Skaffold + Git Submodules
 
-ADR-003 specifies Skaffold + K8s for production deployment. For **this example** the question is what serves as the simplest "just run it" experience:
+We use **Skaffold + K8s** (matching ADR-003) with the three dependency repos as **git submodules** in this workspace. This gives us:
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **Docker Compose** | Zero K8s knowledge needed. in-and-out already ships a working `docker-compose.yml`. Single `docker compose up`. | Not production-representative. No K8s-native features (HPA, CNPG). |
-| **Skaffold + K8s** | Matches ADR-003. Tests production topology. CNPG for PG18 + pg_trickle. | Requires local K8s cluster (minikube/kind). Higher barrier to entry for first run. |
-| **Both** | Compose for "try it", Skaffold for "deploy it". | Two configs to maintain. |
+1. **Single workspace** — edit connectors, mapping config, and engine code in one place without switching repos
+2. **Skaffold hot-reload** — change a connector YAML or Python source → Skaffold rebuilds + redeploys the affected pod in seconds
+3. **Fix-forward workflow** — when hitting an integration seam issue (G4, G5), fix it directly in the submodule, test locally, then push upstream
+4. **Production-representative** — tests the real K8s topology (separate pods, services, CNPG for Postgres)
 
-**Recommendation:** Start with **Docker Compose** for the example. It's what in-and-out already uses and it gets people to a working demo fastest. Add Skaffold manifests in a follow-up if we want to demonstrate the production path.
+#### Git Submodule Layout
+
+```
+sesam-opensource-poc/
+├── vendor/
+│   ├── in-and-out/        ← git submodule: github.com/grove/in-and-out
+│   ├── pg-trickle/        ← git submodule: github.com/grove/pg-trickle
+│   └── osi-mapping/       ← git submodule: github.com/BaardBouvet/OSI-mapping
+├── k8s/                   ← K8s manifests for this example (references submodules)
+│   ├── base/
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── postgres.yaml       # CNPG Cluster or StatefulSet with pg_trickle
+│   │   ├── simulator.yaml
+│   │   ├── migrate-job.yaml    # Alembic + OSI-mapping SQL + stream table setup
+│   │   ├── ingest.yaml
+│   │   ├── writeback.yaml
+│   │   └── configmap.yaml      # Connector YAMLs mounted from connectors/
+│   └── overlays/
+│       └── dev/
+│           └── kustomization.yaml  # Dev-specific: NodePort, resource limits, etc.
+├── skaffold.yaml
+├── connectors/
+│   ├── hubspot.yaml
+│   └── tripletex.yaml
+├── mappings/
+│   └── mapping.yaml
+└── ...
+```
+
+#### Setting Up Submodules
+
+```bash
+git submodule add https://github.com/grove/in-and-out.git vendor/in-and-out
+git submodule add https://github.com/grove/pg-trickle.git vendor/pg-trickle
+git submodule add https://github.com/BaardBouvet/OSI-mapping.git vendor/osi-mapping
+```
+
+When working on fixes, create a branch in the submodule, commit, then push upstream:
+```bash
+cd vendor/in-and-out
+git checkout -b fix/association-writeback
+# ... make changes ...
+git commit && git push
+cd ../..
+git add vendor/in-and-out
+git commit -m "bump in-and-out to include association writeback fix"
+```
+
+#### Skaffold Configuration
+
+```yaml
+# skaffold.yaml
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: sesam-poc
+
+build:
+  artifacts:
+    - image: inandout-engine
+      context: vendor/in-and-out
+      docker:
+        dockerfile: engine/Dockerfile
+    - image: inandout-simulator
+      context: vendor/in-and-out
+      docker:
+        dockerfile: simulator/Dockerfile
+    - image: osi-mapping-engine
+      context: vendor/osi-mapping
+      docker:
+        dockerfile: engine-rs/Dockerfile       # or a thin wrapper
+  local:
+    push: false                                 # minikube/kind — no registry needed
+
+deploy:
+  kustomize:
+    paths:
+      - k8s/overlays/dev
+
+portForward:
+  - resourceType: service
+    resourceName: postgres
+    port: 5432
+    localPort: 5432
+  - resourceType: service
+    resourceName: simulator
+    port: 6100
+    localPort: 6100
+  - resourceType: service
+    resourceName: ingest
+    port: 9090
+    localPort: 9090
+  - resourceType: service
+    resourceName: writeback
+    port: 9091
+    localPort: 9091
+```
+
+Skaffold watches `vendor/in-and-out/`, `vendor/osi-mapping/`, `connectors/`, and `mappings/` for changes. Editing a connector YAML triggers a configmap update + pod restart. Editing Python engine code triggers a full image rebuild + redeploy.
+
+#### Local K8s Cluster
+
+Requires a local Kubernetes cluster. Recommended: **minikube** or **kind**.
+
+```bash
+# One-time setup
+minikube start --cpus=4 --memory=8g --kubernetes-version=v1.33.0
+minikube addons enable ingress
+
+# Run (Skaffold handles build + deploy + port-forward + log tailing)
+skaffold dev
+```
+
+`skaffold dev` enters a continuous loop: build → deploy → tail logs → watch for changes → rebuild. `Ctrl+C` tears down all deployed resources.
+
+#### PostgreSQL with pg-trickle
+
+Two options for PG 18 + pg_trickle in K8s:
+
+| Option | How | When to use |
+|--------|-----|-------------|
+| **CNPG + extension image** | CloudNativePG `Cluster` resource with `ghcr.io/grove/pg_trickle-ext:0.11.0` as image volume extension | Closest to production. Requires CNPG operator installed in cluster. |
+| **Custom StatefulSet** | Build from `vendor/pg-trickle/Dockerfile.hub` which bundles PG 18 + pg_trickle | Simpler. No operator dependency. Good for dev. |
+
+Start with the **StatefulSet** approach for simplicity. Add the CNPG path later.
+
+```yaml
+# k8s/base/postgres.yaml (StatefulSet approach)
+# Image built from vendor/pg-trickle/Dockerfile.hub
+# Mounts: shared_preload_libraries = 'pg_trickle'
+```
+
+This gets added to `skaffold.yaml` as another build artifact:
+```yaml
+    - image: postgres-pgtrickle
+      context: vendor/pg-trickle
+      docker:
+        dockerfile: Dockerfile.hub
+```
 
 #### Runtime Architecture
 
 ```
-docker compose up
-├── postgres           (PG 18 + pg_trickle extension, port 5432)
-├── simulator          (FastAPI — both HubSpot + Tripletex endpoints, port 6100)
-│   ├── /hubspot/*
-│   └── /tripletex/*
-├── migrate            (runs once: alembic + OSI-mapping SQL + stream table setup)
-├── ingest             (polls both simulators, writes to PG)
-└── writeback          (reads delta stream tables, pushes to simulators)
+skaffold dev
+├── postgres-pgtrickle    (PG 18 + pg_trickle, port-forwarded to :5432)
+├── simulator             (FastAPI — HubSpot + Tripletex, port-forwarded to :6100)
+├── migrate               (Job: alembic + osi-mapping SQL + stream tables — runs once)
+├── ingest                (Deployment: polls simulators, port-forwarded to :9090)
+└── writeback             (Deployment: reads deltas, pushes to simulators, port-forwarded to :9091)
 ```
-
-The simulator already supports multiple connectors on a single port (path-routed). PG needs the pg_trickle Docker image (`ghcr.io/grove/pg_trickle-ext`) or a custom `Dockerfile` that builds from `postgres:18` + extension install.
 
 #### Bootstrap Sequence
 
-1. **Start PostgreSQL** with pg_trickle preloaded (`shared_preload_libraries = 'pg_trickle'`)
-2. **Migrate** — Alembic creates in-and-out's schema tables
-3. **OSI-mapping setup** — Run the engine to generate materialized view SQL, pipe through `convert_matviews_to_pgtrickle.py`, apply to PG → stream tables created
-4. **Start simulators** — pre-seeded with test data
-5. **Start in-and-out ingest** — pulls contacts, companies, associations from both simulators
-6. **pg-trickle processes** — CDC triggers fire, stream tables update incrementally through the DAG
-7. **Start in-and-out writeback** — reads delta stream tables, pushes merged data back to simulators
-8. **Verify** — simulator UIs show merged data; delta stream tables are empty (converged)
+1. **Skaffold builds images** from submodules (in-and-out engine, simulator, pg-trickle, osi-mapping)
+2. **Deploy postgres-pgtrickle** StatefulSet — pg_trickle preloaded, `CREATE EXTENSION pg_trickle`
+3. **Run migrate Job:**
+   - Alembic creates in-and-out schema tables
+   - OSI-mapping engine reads `mapping.yaml`, generates materialized view SQL
+   - `convert_matviews_to_pgtrickle.py` rewrites to stream table calls
+   - `psql` applies → stream tables registered, DAG built
+4. **Deploy simulator** — pre-seeded with connector seed data
+5. **Deploy ingest** — polls both simulators, writes to PG
+6. **pg-trickle processes** — CDC triggers fire, stream tables update incrementally through DAG
+7. **Deploy writeback** — reads delta stream tables, pushes merged data to simulators
+8. **Verify** — port-forward to simulator UI, check merged data; query `pgtrickle.quick_health`
 
 #### End-to-End Test Scenario
 
@@ -344,14 +482,14 @@ psql -c "SELECT * FROM pgtrickle.quick_health;"
 psql -c "SELECT * FROM pgtrickle.refresh_timeline(10);"
 ```
 
-**Full stack (opt-in):** in-and-out ships `docker-compose.observability.yml` overlay with Prometheus + Grafana + Alertmanager. Adds:
-- Prometheus scraping ingest (`:9090/metrics`) and writeback (`:9091/metrics`) at 15s intervals
-- Grafana dashboards (pre-provisioned) for sync lag, record throughput, error rates
-- Alertmanager for circuit breaker opens, SLA violations
+**Full stack (opt-in):** Add Prometheus + Grafana as K8s manifests in `k8s/overlays/observability/`. in-and-out already ships a `servicemonitor.yaml` in its `k8s/` directory. Adds:
+- Prometheus scraping ingest (`:9090/metrics`) and writeback (`:9091/metrics`) via ServiceMonitor
+- Grafana dashboards (provisioned via ConfigMap) for sync lag, record throughput, error rates
+- postgres_exporter for pg-trickle views (optional)
 
-Layer it on with:
+Enable via a Skaffold profile:
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up
+skaffold dev -p observability
 ```
 
 pg-trickle views can be scraped into the same Prometheus via [postgres_exporter](https://github.com/prometheus-community/postgres_exporter) custom queries, but this is unnecessary for the example — the SQL views are sufficient.
@@ -372,31 +510,49 @@ This is an example setup. The scale targets are modest: ~10 records per entity, 
 
 ## Gap Analysis Summary
 
-| # | Gap | Severity | Owner |
-|---|-----|----------|-------|
-| G1 | HubSpot association writeback missing in connector | **Blocker** | in-and-out |
-| G2 | Tripletex contacts incremental ingestion missing | **Blocker** | in-and-out |
-| G3 | Simulator seed data not aligned for merge scenario | High | in-and-out |
-| G4 | in-and-out output schema ↔ OSI-mapping source names | **Blocker** | Integration |
-| G5 | OSI-mapping delta views ↔ in-and-out writeback contract | **Blocker** | Integration |
-| G6 | pg-trickle SQL compatibility validation | High | Integration |
-| G7 | PG 18 + pg_trickle Docker image for compose | Medium | pg-trickle / this repo |
-| G8 | OSI-mapping `--materialized-views` → `convert_matviews_to_pgtrickle.py` pipeline tested | Medium | Integration |
-| G9 | Country vocabulary mapping (Tripletex "Norge" ↔ ISO "NO") | Low (defer) | mapping.yaml |
+| # | Gap | Severity | Owner | Notes |
+|---|-----|----------|-------|-------|
+| G1 | HubSpot association writeback missing in connector | **Blocker** | in-and-out | Fix in `vendor/in-and-out`, push upstream |
+| G2 | Tripletex contacts incremental ingestion missing | **Blocker** | in-and-out | Fix in `vendor/in-and-out`, push upstream |
+| G3 | Simulator seed data not aligned for merge scenario | High | in-and-out | Fix in `vendor/in-and-out`, push upstream |
+| G4 | in-and-out output schema ↔ OSI-mapping source names | **Blocker** | Integration | Run ingest once via `skaffold dev`, inspect PG, update mapping |
+| G5 | OSI-mapping delta views ↔ in-and-out writeback contract | **Blocker** | Integration | May require changes in `vendor/osi-mapping` or `vendor/in-and-out` |
+| G6 | pg-trickle SQL compatibility validation | High | Integration | Run `pgtrickle.validate_query()` on generated SQL |
+| G7 | pg-trickle Dockerfile.hub builds + works in StatefulSet | Medium | pg-trickle | Verify build from `vendor/pg-trickle` |
+| G8 | OSI-mapping `--materialized-views` → `convert_matviews_to_pgtrickle.py` pipeline tested | Medium | Integration | Script in migrate Job |
+| G9 | Country vocabulary mapping (Tripletex "Norge" ↔ ISO "NO") | Low (defer) | mapping.yaml | Not needed for initial example |
+| G10 | Skaffold config + K8s manifests for all services | High | This repo | New: write `skaffold.yaml`, `k8s/` manifests |
+| G11 | OSI-mapping engine needs a Dockerfile | Medium | osi-mapping | May need to add in `vendor/osi-mapping` |
 
 ## File Inventory
 
-When complete, the example directory should contain:
-
 ```
-examples/hubspot-tripletex-sync/
-├── docker-compose.yml              # All services
+sesam-opensource-poc/
+├── vendor/
+│   ├── in-and-out/                 # git submodule
+│   ├── pg-trickle/                 # git submodule
+│   └── osi-mapping/                # git submodule
+├── skaffold.yaml                   # Build + deploy config
+├── k8s/
+│   ├── base/
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── postgres.yaml           # StatefulSet: PG 18 + pg_trickle
+│   │   ├── simulator.yaml          # Deployment: FastAPI simulators
+│   │   ├── migrate-job.yaml        # Job: alembic + osi-mapping + stream tables
+│   │   ├── ingest.yaml             # Deployment: in-and-out ingest
+│   │   ├── writeback.yaml          # Deployment: in-and-out writeback
+│   │   ├── configmap.yaml          # Connector YAMLs
+│   │   └── services.yaml           # ClusterIP services
+│   └── overlays/
+│       └── dev/
+│           └── kustomization.yaml  # Dev: port config, resource limits
 ├── connectors/
-│   ├── hubspot.yaml                # Expanded from in-and-out example
-│   └── tripletex.yaml              # Expanded from in-and-out example
-├── mapping.yaml                    # OSI-mapping config (symlink or copy)
+│   ├── hubspot.yaml                # Expanded connector
+│   └── tripletex.yaml              # Expanded connector
+├── mappings/
+│   └── mapping.yaml                # OSI-mapping config
 ├── scripts/
-│   └── generate-stream-tables.sh   # osi-mapping → matviews → pg-trickle
-├── Dockerfile.postgres             # PG 18 + pg_trickle extension
-└── README.md                       # How to run, what to expect
+│   └── generate-stream-tables.sh   # osi-mapping → matviews → pg-trickle (used by migrate Job)
+└── .gitmodules                     # Submodule definitions
 ```
