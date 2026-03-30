@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sesam-poc
+
+bases:
+  - ../../base
+
+# Dev overlay: lower resource limits so the cluster fits in a devcontainer.
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "512Mi"
+    target:
+      kind: StatefulSet
+      name: postgres
+
+  # Keep single replicas explicit for local dev
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Deployment
+
+# Direct postgres access is handled by `skaffold dev` portForward rules
+# (localhost:5432 → pod port 5432) — no NodePort needed in dev.

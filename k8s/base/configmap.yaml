@@ -1,0 +1,124 @@
+# ConfigMap for in-and-out engine configs and the OSI mapping spec.
+# Connector YAMLs (hubspot.yaml, tripletex.yaml) are loaded from the connectors/
+# directory on disk — managed by the connectors-configmap below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inandout-config
+  namespace: sesam-poc
+data:
+  ingestion.yaml: |
+    database:
+      dsn: "${INOUT_DATABASE_URL}"
+    connectors_dir: /connectors
+    namespace: public
+    health_server:
+      listen: "0.0.0.0:9090"
+    observability:
+      logging:
+        format: json
+        level: info
+      metrics:
+        enabled: true
+      tracing:
+        enabled: false
+
+  writeback.yaml: |
+    database:
+      dsn: "${INOUT_DATABASE_URL}"
+    connectors_dir: /connectors
+    namespace: public
+    health_server:
+      listen: "0.0.0.0:9091"
+    observability:
+      logging:
+        format: json
+        level: info
+      metrics:
+        enabled: true
+      tracing:
+        enabled: false
+---
+# OSI mapping definition — rendered to SQL by the migrate job.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osi-mapping-config
+  namespace: sesam-poc
+data:
+  mapping.yaml: |
+    # Contents synced from mappings/mapping.yaml at deploy time.
+    # The migrate-job mounts this and runs osi-engine render against it.
+    # See mappings/mapping.yaml for the full source of truth.
+---
+# Connector YAMLs — one per external system.
+# Replace the placeholder content with the real connector definitions once
+# the connectors/ directory is populated (see plans/example-setup.md G4/G5).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inandout-connectors
+  namespace: sesam-poc
+data:
+  hubspot.yaml: |
+    schema_version: 1
+    connector:
+      name: hubspot
+      system: HubSpot CRM
+      generation_profile: full_duplex
+      api_version: "v3"
+      connection:
+        base_url: http://inandout-simulator:6100/hubspot
+      auth:
+        type: api_key
+        credential_ref: hubspot_api_key
+        api_key:
+          location: header
+          name: Authorization
+      datatypes:
+        contacts:
+          ingestion:
+            primary_key: id
+            history_mode: overwrite
+            schedule:
+              interval: "5m"
+            list:
+              method: GET
+              path: /contacts
+              record_selector: results
+              pagination:
+                strategy: cursor
+                cursor:
+                  request_param: after
+                  response_path: paging.next.after
+  tripletex.yaml: |
+    schema_version: 1
+    connector:
+      name: tripletex
+      system: Tripletex
+      generation_profile: full_duplex
+      api_version: "v2"
+      connection:
+        base_url: http://inandout-simulator:6100/tripletex
+      auth:
+        type: api_key
+        credential_ref: tripletex_api_key
+        api_key:
+          location: header
+          name: Authorization
+      datatypes:
+        customers:
+          ingestion:
+            primary_key: id
+            history_mode: overwrite
+            schedule:
+              interval: "5m"
+            list:
+              method: GET
+              path: /customers
+              record_selector: values
+              pagination:
+                strategy: cursor
+                cursor:
+                  request_param: from
+                  response_path: paging.next.from

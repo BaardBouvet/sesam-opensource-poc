@@ -1,37 +1,73 @@
 # Devcontainer
 
-PostgreSQL 18 with `pg_trickle` preinstalled. No example data is loaded automatically — start fresh and load whichever example you want.
+Developer tooling container for `sesam-opensource-poc`. Provides all the tools needed to build and run the full pipeline locally via a **kind Kubernetes cluster** managed by **Skaffold**.
 
-## What is preconfigured
+PostgreSQL does **not** run inside the devcontainer — it runs as a StatefulSet inside the kind cluster (image: `postgres-pgtrickle`, built from `vendor/pg-trickle/Dockerfile.hub`).
 
-- `pg_trickle` installed from the official release archive (`v0.9.0` by default)
-- `shared_preload_libraries=pg_trickle`, `max_worker_processes=16`
-- `CREATE EXTENSION pg_trickle` runs on first database initialization
-- PostgreSQL data persisted in a named Docker volume at `/var/lib/postgresql`
-- Connection env vars pre-set: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
+## What is pre-installed
 
-## Running an example
+| Tool | Purpose |
+|---|---|
+| `kubectl` | Manage the kind cluster |
+| `skaffold` | Build images + deploy to kind |
+| `kind` | Local Kubernetes cluster (Docker-in-Docker) |
+| `kustomize` | Render K8s overlays |
+| `just` | Task runner (`just --list` to see all recipes) |
+| `uv` | Python package manager (for in-and-out dev) |
+| `cargo` / `rustup` | Rust toolchain (for osi-mapping dev) |
+| `psql` | PostgreSQL client (connects to the in-cluster pod) |
 
-1. Open this repository in VS Code.
-2. Run **Dev Containers: Reopen in Container**.
-3. Load the example's seed data and stream tables:
+## First-time setup
+
+1. Open the repository in VS Code.
+2. Run **Dev Containers: Reopen in Container** — this builds the tooling image and installs all tools.
+3. Once inside the container, bootstrap the cluster:
 
 ```bash
-psql -v ON_ERROR_STOP=1 -f examples/<name>/seed.sql
-psql -v ON_ERROR_STOP=1 -f examples/<name>/pgtrickle.sql
+just bootstrap
+# Equivalent to: just cluster-create && just submodules && just deploy
 ```
 
-For example:
+4. Confirm everything is running:
+
+```bash
+just status
+```
+
+5. Connect to the in-cluster postgres (Skaffold forwards port 5432):
+
+```bash
+just psql
+```
+
+## Daily workflow
+
+```bash
+just dev          # start Skaffold in watch mode (rebuild + redeploy on save)
+just logs-ingest  # tail ingest container logs
+just logs-sim     # tail simulator logs
+just undeploy     # tear down all cluster resources
+```
+
+## Loading the examples
+
+With the cluster running and port 5432 forwarded:
 
 ```bash
 psql -v ON_ERROR_STOP=1 -f examples/person_with_orders/seed.sql
 psql -v ON_ERROR_STOP=1 -f examples/person_with_orders/pgtrickle.sql
 ```
 
-## Reset database
+## Reset
 
-Remove the named volume and rebuild to get a clean Postgres instance:
+To start completely fresh:
 
 ```bash
-docker volume rm sesam-opensource-poc-pgroot
+just cluster-delete
+just cluster-create
+just deploy
 ```
+
+## db/
+
+The `db/init/` directory contains a legacy SQL init script from when postgres ran directly inside the devcontainer. It is **no longer used** — `CREATE EXTENSION pg_trickle` is now handled automatically by the `Dockerfile.hub` image (baked into `docker-entrypoint-initdb.d/`). The file is kept for reference only.

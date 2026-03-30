@@ -2,37 +2,54 @@
   "name": "sesam-opensource-poc",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": "..",
-    "args": {
-      "PG_TRICKLE_VERSION": "0.9.0"
-    }
+    "context": ".."
   },
-  "overrideCommand": false,
   "workspaceFolder": "/workspaces/sesam-opensource-poc",
   "remoteUser": "vscode",
-  "forwardPorts": [5432],
-  "mounts": [
-    "source=sesam-opensource-poc-pgroot,target=/var/lib/postgresql,type=volume"
-  ],
-  "containerEnv": {
-    "POSTGRES_USER": "postgres",
-    "POSTGRES_PASSWORD": "postgres",
-    "POSTGRES_DB": "postgres"
+
+  // Docker-in-Docker: lets Skaffold build images and run kind inside the container
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false,
+      "dockerDashComposeVersion": "v2"
+    }
   },
+
+  // Initialise submodules and install Python deps on first create
+  "postCreateCommand": "git submodule update --init --recursive && cd vendor/in-and-out && uv sync --all-packages --all-extras",
+
+  // Port-forward the services Skaffold exposes from the kind cluster
+  "forwardPorts": [
+    5432,  // postgres
+    6100,  // simulator
+    9090,  // ingest health/metrics
+    9091   // writeback health/metrics
+  ],
+
   "customizations": {
     "vscode": {
       "extensions": [
+        // Infrastructure
         "ms-azuretools.vscode-docker",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        // Python (in-and-out)
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        // Rust (pg-trickle, osi-mapping)
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        // Data
         "mtxr.sqltools",
-        "mtxr.sqltools-driver-pg"
-      ]
+        "mtxr.sqltools-driver-pg",
+        "redhat.vscode-yaml",
+        // Taskrunner
+        "skellock.just"
+      ],
+      "settings": {
+        "editor.formatOnSave": true
+      }
     }
-  },
-  "remoteEnv": {
-    "PGHOST": "localhost",
-    "PGPORT": "5432",
-    "PGUSER": "postgres",
-    "PGPASSWORD": "postgres",
-    "PGDATABASE": "postgres"
   }
 }

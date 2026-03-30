@@ -1,32 +1,67 @@
-FROM postgres:18.3
+# Developer tooling container for sesam-opensource-poc.
+# Provides: kubectl, skaffold, kind, kustomize, uv (Python), Rust, just.
+# PostgreSQL is NOT here — it runs as a K8s pod via Skaffold.
+#
+# Docker-in-Docker is provided by the devcontainer feature in devcontainer.json.
 
-ARG PG_TRICKLE_VERSION=0.9.0
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+
+ARG KUBECTL_VERSION=1.33.0
+ARG SKAFFOLD_VERSION=2.14.0
+ARG KIND_VERSION=0.27.0
+ARG KUSTOMIZE_VERSION=5.6.0
+ARG JUST_VERSION=1.40.0
+ARG UV_VERSION=0.6.12
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl git sudo; \
-    rm -rf /var/lib/apt/lists/*; \
-    arch="$(dpkg --print-architecture)"; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl git sudo postgresql-client python3 python3-pip \
+        build-essential pkg-config libssl-dev; \
+    rm -rf /var/lib/apt/lists/*
+
+# ── kubectl ────────────────────────────────────────────────────────────────────
+RUN arch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
+        -o /usr/local/bin/kubectl; \
+    chmod +x /usr/local/bin/kubectl
+
+# ── skaffold ───────────────────────────────────────────────────────────────────
+RUN arch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://storage.googleapis.com/skaffold/releases/v${SKAFFOLD_VERSION}/skaffold-linux-${arch}" \
+        -o /usr/local/bin/skaffold; \
+    chmod +x /usr/local/bin/skaffold
+
+# ── kind ───────────────────────────────────────────────────────────────────────
+RUN arch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-${arch}" \
+        -o /usr/local/bin/kind; \
+    chmod +x /usr/local/bin/kind
+
+# ── kustomize ─────────────────────────────────────────────────────────────────
+RUN arch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_${arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin; \
+    chmod +x /usr/local/bin/kustomize
+
+# ── just ──────────────────────────────────────────────────────────────────────
+RUN arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
-      amd64) artifact_arch="linux-amd64" ;; \
-      arm64) artifact_arch="linux-arm64" ;; \
-      *) echo "Unsupported architecture: ${arch}"; exit 1 ;; \
+      amd64) just_arch="x86_64-unknown-linux-musl" ;; \
+      arm64) just_arch="aarch64-unknown-linux-musl" ;; \
     esac; \
-    artifact="pg_trickle-${PG_TRICKLE_VERSION}-pg18-${artifact_arch}.tar.gz"; \
-    release_url="https://github.com/grove/pg-trickle/releases/download/v${PG_TRICKLE_VERSION}"; \
-    curl -fsSL "${release_url}/${artifact}" -o "/tmp/${artifact}"; \
-    curl -fsSL "${release_url}/SHA256SUMS.txt" -o /tmp/SHA256SUMS.txt; \
-    cd /tmp; \
-    grep " ${artifact}$" SHA256SUMS.txt | sha256sum -c -; \
-    tar -xzf "/tmp/${artifact}" -C /tmp; \
-    unpacked_dir="/tmp/${artifact%.tar.gz}"; \
-    cp "${unpacked_dir}/lib/pg_trickle.so" "$(pg_config --pkglibdir)/"; \
-    cp "${unpacked_dir}/extension/"* "$(pg_config --sharedir)/extension/"; \
-    rm -rf /tmp/SHA256SUMS.txt "/tmp/${artifact}" "${unpacked_dir}"; \
-    useradd -m -s /bin/bash vscode; \
-    echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode; \
-    chmod 0440 /etc/sudoers.d/vscode
+    curl -fsSL "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-${just_arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin just; \
+    chmod +x /usr/local/bin/just
 
-COPY .devcontainer/db/init/00_enable_pgtrickle.sql /docker-entrypoint-initdb.d/
+# ── uv (Python package manager) ───────────────────────────────────────────────
+RUN curl -fsSL "https://astral.sh/uv/install.sh" | UV_VERSION="${UV_VERSION}" sh; \
+    mv /root/.local/bin/uv /usr/local/bin/uv; \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx 2>/dev/null || true
 
-CMD ["postgres", "-c", "shared_preload_libraries=pg_trickle", "-c", "max_worker_processes=16"]
+# ── Rust ──────────────────────────────────────────────────────────────────────
+USER vscode
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain stable
+ENV PATH="/home/vscode/.cargo/bin:${PATH}"
+USER root

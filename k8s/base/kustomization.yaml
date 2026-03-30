@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sesam-poc
+
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - migrate-job.yaml
+  - ingest.yaml
+  - writeback.yaml
+  - simulator.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: sesam-poc
+  app.kubernetes.io/managed-by: kustomize

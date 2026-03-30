@@ -1,0 +1,96 @@
+# Migrate job — runs once on deploy to set up the schema.
+#
+# Step sequence (init containers run in order):
+#   1. osi-engine (osi-mapping image): render mapping.yaml → matviews.sql
+#   2. convert-matviews (osi-mapping image): python convert script → pgtrickle.sql
+#   3. db-upgrade (inandout image):  run Alembic migrations
+#
+# Main container: apply pgtrickle.sql to PostgreSQL via psql (pg_trickle image).
+#
+# All steps share an emptyDir /shared for the generated SQL files.
+# The mapping.yaml is mounted from the osi-mapping-config ConfigMap.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sesam-migrate
+  namespace: sesam-poc
+  annotations:
+    # Increment name suffix (sesam-migrate-2 etc.) to re-run after deploy.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: osi-render
+          image: osi-mapping-engine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - osi-engine
+            - render
+            - --output
+            - /shared/matviews.sql
+            - --materialize
+            - /mapping/mapping.yaml
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            - name: mapping
+              mountPath: /mapping
+
+        - name: convert-matviews
+          image: osi-mapping-engine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /usr/local/bin/convert_matviews_to_pgtrickle.py
+            - /shared/matviews.sql
+            - /shared/pgtrickle.sql
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+
+        - name: db-upgrade
+          image: inandout-engine:latest
+          imagePullPolicy: IfNotPresent
+          command: ["inandout", "db", "upgrade", "--config", "/config/ingestion.yaml"]
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+          volumeMounts:
+            - name: config
+              mountPath: /config
+
+      containers:
+        - name: apply-pgtrickle-sql
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for postgres to be ready..."
+              until pg_isready -h postgres -U inandout; do
+                sleep 2
+              done
+              echo "Applying pg_trickle stream-table SQL..."
+              psql "$INOUT_DATABASE_URL" -f /shared/pgtrickle.sql
+              echo "Migration complete."
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+
+      volumes:
+        - name: shared
+          emptyDir: {}
+        - name: mapping
+          configMap:
+            name: osi-mapping-config
+        - name: config
+          configMap:
+            name: inandout-config

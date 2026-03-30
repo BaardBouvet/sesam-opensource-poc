@@ -1,0 +1,70 @@
+# Simulator — serves mock HubSpot and Tripletex API responses so the
+# pipeline can be exercised without live credentials.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inandout-simulator
+  namespace: sesam-poc
+  labels:
+    app: inandout-simulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inandout-simulator
+  template:
+    metadata:
+      labels:
+        app: inandout-simulator
+    spec:
+      containers:
+        - name: simulator
+          image: inandout-simulator:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - inandout-simulator
+            - --connector
+            - /connectors/hubspot.yaml
+            - --connector
+            - /connectors/tripletex.yaml
+            - --engine-url
+            - http://inandout-ingest:9090
+          ports:
+            - name: http
+              containerPort: 6100
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 6100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: connectors
+              mountPath: /connectors
+      volumes:
+        - name: connectors
+          configMap:
+            name: inandout-connectors
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inandout-simulator
+  namespace: sesam-poc
+  labels:
+    app: inandout-simulator
+spec:
+  ports:
+    - name: http
+      port: 6100
+      targetPort: 6100
+  selector:
+    app: inandout-simulator

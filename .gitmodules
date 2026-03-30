@@ -1,0 +1,9 @@
+[submodule "vendor/in-and-out"]
+	path = vendor/in-and-out
+	url = https://github.com/grove/in-and-out.git
+[submodule "vendor/pg-trickle"]
+	path = vendor/pg-trickle
+	url = https://github.com/grove/pg-trickle.git
+[submodule "vendor/osi-mapping"]
+	path = vendor/osi-mapping
+	url = https://github.com/BaardBouvet/OSI-mapping.git

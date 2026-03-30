@@ -1,0 +1,75 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: sesam-poc
+
+build:
+  local:
+    push: false       # load directly into kind — no registry needed
+    useBuildkit: true
+  artifacts:
+    # ── in-and-out engine (ingest + writeback + migrate) ─────────────────────
+    - image: inandout-engine
+      context: vendor/in-and-out
+      docker:
+        dockerfile: engine/Dockerfile
+      sync:
+        # Hot-reload Python source during `skaffold dev`
+        manual:
+          - src: "engine/src/**/*.py"
+            dest: /app/src
+
+    # ── in-and-out simulator ─────────────────────────────────────────────────
+    - image: inandout-simulator
+      context: vendor/in-and-out
+      docker:
+        dockerfile: simulator/Dockerfile
+
+    # ── PostgreSQL + pg_trickle ───────────────────────────────────────────────
+    - image: postgres-pgtrickle
+      context: vendor/pg-trickle
+      docker:
+        dockerfile: Dockerfile.hub
+
+    # ── OSI-mapping engine (Rust CLI + matview conversion script) ─────────────
+    # Context is the workspace root so both vendor/osi-mapping and
+    # vendor/pg-trickle/scripts are accessible in the build.
+    - image: osi-mapping-engine
+      context: .
+      docker:
+        dockerfile: docker/osi-mapping.Dockerfile
+
+manifests:
+  kustomize:
+    paths:
+      - k8s/overlays/dev
+
+deploy:
+  kubeContext: kind-sesam-poc   # kind cluster created by `just cluster-create`
+  kubectl: {}
+
+# Port-forward from the kind cluster to localhost inside the devcontainer.
+portForward:
+  - resourceType: StatefulSet
+    resourceName: postgres
+    namespace: sesam-poc
+    port: 5432
+    localPort: 5432
+
+  - resourceType: Service
+    resourceName: inandout-simulator
+    namespace: sesam-poc
+    port: 6100
+    localPort: 6100
+
+  - resourceType: Service
+    resourceName: inandout-ingest
+    namespace: sesam-poc
+    port: 9090
+    localPort: 9090
+
+  - resourceType: Service
+    resourceName: inandout-writeback
+    namespace: sesam-poc
+    port: 9091
+    localPort: 9091

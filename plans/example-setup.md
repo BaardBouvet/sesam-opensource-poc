@@ -547,12 +547,106 @@ sesam-opensource-poc/
 │   └── overlays/
 │       └── dev/
 │           └── kustomization.yaml  # Dev: port config, resource limits
+├── docker/
+│   └── osi-mapping.Dockerfile      # Multi-stage Rust build (osi-engine + convert script)
 ├── connectors/
 │   ├── hubspot.yaml                # Expanded connector
 │   └── tripletex.yaml              # Expanded connector
 ├── mappings/
 │   └── mapping.yaml                # OSI-mapping config
-├── scripts/
-│   └── generate-stream-tables.sh   # osi-mapping → matviews → pg-trickle (used by migrate Job)
+├── justfile                        # Developer task runner (just bootstrap / just dev)
 └── .gitmodules                     # Submodule definitions
 ```
+
+---
+
+## 6. Devcontainer + Skaffold Setup
+
+### Architecture
+
+```
+┌─────────────── devcontainer ────────────────────────────────┐
+│  VS Code + tools: kubectl  skaffold  kind  uv  cargo  just  │
+│                                                              │
+│  Docker-in-Docker (feature)                                  │
+│         │                                                    │
+│         ▼                                                    │
+│  kind cluster "sesam-poc"                                    │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  namespace: sesam-poc                                │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │   │
+│  │  │ postgres │  │  ingest  │  │    writeback     │   │   │
+│  │  │ (pg_tri- │  │  :9090   │  │     :9091        │   │   │
+│  │  │  ckle)   │  └──────────┘  └──────────────────┘   │   │
+│  │  └──────────┘  ┌──────────┐  ┌──────────────────┐   │   │
+│  │                │simulator │  │  migrate (Job)   │   │   │
+│  │                │  :6100   │  │  osi-engine +    │   │   │
+│  │                └──────────┘  │  db upgrade      │   │   │
+│  │                              └──────────────────┘   │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  Port-forwards (skaffold dev):                               │
+│    localhost:5432  →  postgres                               │
+│    localhost:6100  →  simulator                              │
+│    localhost:9090  →  ingest metrics/health                  │
+│    localhost:9091  →  writeback metrics/health               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### First-run checklist
+
+```bash
+# 1. Open repo in VS Code → "Reopen in Container"
+#    (builds .devcontainer/Dockerfile — installs kubectl/skaffold/kind/uv/cargo/just)
+
+# 2. Bootstrap cluster + deploy all services
+just bootstrap
+
+# 3. Confirm pods are running
+just status
+
+# 4. Tail ingest logs to verify connector loading
+just logs-ingest
+```
+
+### Image build summary
+
+| Image tag | Source Dockerfile | Build context |
+|---|---|---|
+| `inandout-engine` | `vendor/in-and-out/engine/Dockerfile` | `vendor/in-and-out/` |
+| `inandout-simulator` | `vendor/in-and-out/simulator/Dockerfile` | `vendor/in-and-out/` |
+| `postgres-pgtrickle` | `vendor/pg-trickle/Dockerfile.hub` | `vendor/pg-trickle/` |
+| `osi-mapping-engine` | `docker/osi-mapping.Dockerfile` | `.` (workspace root) |
+
+The `osi-mapping-engine` context must be the workspace root because the Dockerfile copies from both `vendor/osi-mapping/engine-rs/` (Rust source) and `vendor/pg-trickle/scripts/convert_matviews_to_pgtrickle.py` (matview conversion helper).
+
+### Migrate job pipeline
+
+```
+init-1 (osi-mapping-engine)
+  osi-engine render mapping.yaml --materialized-views
+      → /shared/matviews.sql
+
+init-2 (osi-mapping-engine)
+  python3 convert_matviews_to_pgtrickle.py matviews.sql
+      → /shared/pgtrickle.sql
+
+init-3 (inandout-engine)
+  inandout db upgrade
+      → Alembic migrations applied
+
+main (postgres-pgtrickle)
+  psql $INOUT_DATABASE_URL -f /shared/pgtrickle.sql
+      → stream tables registered
+```
+
+### Common failure modes
+
+| Symptom | Fix |
+|---|---|
+| `kind: command not found` | `just submodules && just cluster-create` |
+| `skaffold: kubeconfig not found` | Run `kind get kubeconfig --name sesam-poc > ~/.kube/config` |
+| Image not found in kind | `skaffold build` then `kind load docker-image <image>:latest --name sesam-poc` |
+| Port 5432 already in use | Change `localPort` in `skaffold.yaml` portForward section |
+| migrate Job fails at `osi-engine render` | Check `osi-mapping-config` ConfigMap contains valid `mapping.yaml` |
+| migrate Job fails at `convert_matviews...` | Check `--materialized-views` flag is supported by current osi-engine version |
