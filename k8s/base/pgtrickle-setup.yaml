@@ -104,24 +104,39 @@ spec:
               echo "Applying pg_trickle stream-table SQL..."
               psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -f /shared/pgtrickle.sql
 
-              echo "Setting 1-second refresh schedule on leaf delta stream tables..."
+              echo "Setting FULL refresh on ALL stream tables..."
+              # pgtrickle 0.12 removed the automatic full-fallback for wide joins (0.11 behaviour).
+              # Intermediate tables that carry a _base jsonb column cannot use DIFFERENTIAL mode
+              # because the DVM engine generates max(jsonb) which PostgreSQL does not support.
+              # Apply FULL to every table.
+              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+                SELECT pgtrickle.alter_stream_table(pgt_name, refresh_mode => 'FULL')
+                FROM pgtrickle.pgt_stream_tables;
+              "
+
+              echo "Setting schedules: 1s on delta leaves, 5s on intermediate tables..."
+              # Two cascade problems with pgtrickle 0.12 + FULL-mode intermediate tables:
+              #
+              # 1. DIFFERENTIAL _delta_* scheduled at 1s never fires: the scheduler only creates
+              #    CDC-triggered jobs; timer jobs for DIFFERENTIAL streams reading from FULL-mode
+              #    upstream streams are never dispatched (effective_refresh_mode stays NULL).
+              #    Fix: use FULL mode on _delta_* as well — FULL tables DO get timer jobs.
+              #
+              # 2. The dependency graph has a diamond at _id_company/_id_person
+              #    (depends on BOTH _fwd_hubspot_* AND _fwd_tripletex_*). When only one side has
+              #    a CDC event, the cascade stops at the fork. Fix: add a 5s schedule to all
+              #    intermediate FULL tables so they refresh on their own clock regardless of which
+              #    source triggered the cascade.
               psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
                 SELECT pgtrickle.alter_stream_table('_delta_hubspot_companies',    schedule => '1s');
                 SELECT pgtrickle.alter_stream_table('_delta_tripletex_customers',  schedule => '1s');
                 SELECT pgtrickle.alter_stream_table('_delta_hubspot_contacts',     schedule => '1s');
                 SELECT pgtrickle.alter_stream_table('_delta_tripletex_contacts',   schedule => '1s');
                 SELECT pgtrickle.alter_stream_table('_delta_hubspot_associations', schedule => '1s');
-              "
-
-              echo "Setting FULL refresh on intermediate tables (fwd/id/resolved/rev/golden-record)..."
-              # pgtrickle 0.12 removed the automatic full-fallback for wide joins (0.11 behaviour).
-              # Intermediate tables that carry a _base jsonb column cannot use DIFFERENTIAL mode
-              # because the DVM engine generates max(jsonb) which PostgreSQL does not support.
-              # Apply FULL to every table except the _delta_* leaf tables.
-              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-                SELECT pgtrickle.alter_stream_table(pgt_name, refresh_mode => 'FULL')
+                SELECT pgtrickle.alter_stream_table(pgt_name, schedule => '5s')
                 FROM pgtrickle.pgt_stream_tables
-                WHERE pgt_name NOT LIKE '_delta_%';
+                WHERE pgt_name NOT LIKE '_delta_%'
+                  AND pgt_name NOT LIKE '_fwd_%';
               "
               echo "pg_trickle setup complete."
               exec sleep infinity
