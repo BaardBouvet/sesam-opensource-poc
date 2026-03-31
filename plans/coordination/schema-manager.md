@@ -249,7 +249,8 @@ startup
 │   └── (writeback starts after ingest, so initial data is flowing)
 │
 └─► Enter watch loop:
-    ├── Periodic config hash check (detect mapping.yaml / connector changes)
+    ├── inotify watch on /config/ (instant reaction to file sync or ConfigMap remount)
+    ├── Periodic config hash check as fallback (detect changes inotify might miss)
     │   └── If changed → re-enter schema diff (stops components first)
     ├── Shadow mode monitoring (check if promotion is pending or auto-promote timer expired)
     ├── Component health monitoring
@@ -492,19 +493,134 @@ The entire Job and its pre-install hook are removed. The schema-manager replaces
 ### Modify: skaffold.yaml
 
 - Remove the `kubectl delete job sesam-migrate` pre-deploy hook (no longer needed)
-- Add the schema-manager image build:
+- Add the schema-manager image build with file sync for dev:
   ```yaml
   - image: sesam-schema-manager
     context: .
     docker:
       dockerfile: docker/schema-manager.Dockerfile
+    sync:
+      manual:
+        - src: "mapping.yaml"
+          dest: /config/
+        - src: "connectors/**/*.yaml"
+          dest: /config/connectors/
+        - src: "schema-manager/schema_manager/**/*.py"
+          dest: /app/schema_manager/
   ```
+  File sync only applies during `skaffold dev`. During `skaffold run` (one-shot deploy) or CI, Skaffold rebuilds the image with baked-in configs.
 
 ### Modify: justfile
 
 - Replace `just migrate` recipe: instead of deleting/recreating a K8s Job, it can either:
   - Trigger the schema-manager to re-check configs (e.g. `curl http://localhost:9080/reconcile`)
   - Or for local dev: run the schema-manager CLI directly against localhost Postgres
+- Add `just promote` recipe: `curl -X POST http://localhost:9080/promote`
+
+## Config Delivery Strategy
+
+The schema-manager needs `mapping.yaml` and `connectors/*.yaml` to compute the desired database state. How these files reach the schema-manager pod differs between development and production.
+
+### Dev inner loop (`skaffold dev`): file sync + inotify
+
+Config files are baked into the Docker image at build time. During `skaffold dev`, changes are pushed into the running container via Skaffold's file sync (essentially `kubectl cp`) — no image rebuild, no pod restart.
+
+The schema-manager watches `/config/` using `inotify` (via Python's `watchdog` library). When a file changes, it re-hashes immediately and triggers a reconcile if needed.
+
+```
+Developer edits mapping.yaml
+  → Skaffold detects change         ~1s
+  → Skaffold syncs file to pod      ~1s
+  → inotify triggers reconcile      instant
+                                    ─────
+                               Total: ~2s
+```
+
+This gives a sub-2-second feedback loop for config changes during development.
+
+### One-shot deploy (`skaffold run`): image rebuild
+
+When using `skaffold run` (or CI pipelines), file sync is not available. Skaffold rebuilds the schema-manager image with the latest configs baked in. The schema-manager starts, reads `/config/`, and reconciles.
+
+```
+Developer runs skaffold run
+  → Docker builds image (cached layers)  ~10-15s
+  → Pod starts with new image
+  → Schema-manager reconciles on startup
+                                         ───────
+                                    Total: ~15-20s
+```
+
+### Production: ConfigMap with hash-triggered rollout
+
+In production, configs come from ConfigMaps that override the baked-in files via volume mounts. The kustomize `configMapGenerator` produces name-suffixed ConfigMaps (hash in the name). When config content changes, the ConfigMap name changes, the Deployment's volume reference updates, and Kubernetes rolls out a new pod.
+
+```yaml
+# kustomization.yaml — production overlay
+configMapGenerator:
+  - name: osi-mapping-config
+    files:
+      - mapping.yaml=../../mapping.yaml
+    # No disableNameSuffixHash — hash suffix enables auto-rollout
+```
+
+The schema-manager Deployment mounts these ConfigMaps:
+
+```yaml
+volumesMounts:
+  - name: mapping
+    mountPath: /config/mapping.yaml
+    subPath: mapping.yaml
+  - name: connectors
+    mountPath: /config/connectors
+volumes:
+  - name: mapping
+    configMap:
+      name: osi-mapping-config
+  - name: connectors
+    configMap:
+      name: inandout-connectors
+```
+
+When the ConfigMap hash changes, the new pod starts with the updated files already mounted. The schema-manager's startup reconcile handles the rest.
+
+```
+Config change merged to main
+  → CI builds + applies new ConfigMap    ~30-60s
+  → New pod starts (image cached)         ~5-10s
+  → Schema-manager reconciles on startup
+                                          ───────
+                                     Total: ~40-70s
+```
+
+### Dev overlay: remove ConfigMap mounts
+
+The dev overlay strips the ConfigMap volume mounts so that the baked-in files are used and Skaffold file sync works correctly:
+
+```yaml
+# k8s/overlays/dev/kustomization.yaml
+patches:
+  - patch: |-
+      - op: remove
+        path: /spec/template/spec/volumes/0      # mapping ConfigMap
+      - op: remove
+        path: /spec/template/spec/volumes/0      # connectors ConfigMap
+      - op: remove
+        path: /spec/template/spec/containers/0/volumeMounts/0
+      - op: remove
+        path: /spec/template/spec/containers/0/volumeMounts/0
+    target:
+      kind: Deployment
+      name: sesam-schema-manager
+```
+
+### Summary
+
+| Environment | Config source | Trigger mechanism | Latency |
+|------------|--------------|-------------------|--------|
+| `skaffold dev` | Baked in image + file sync | `inotify` on `/config/` | ~2s |
+| `skaffold run` | Baked in image | Startup reconcile | ~15-20s |
+| Production | ConfigMap (hash-suffixed) | Pod rollout on CM change | ~40-70s |
 
 ## Schema-Manager Docker Image
 
@@ -534,6 +650,9 @@ RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/ap
 COPY schema-manager/ /app/
 WORKDIR /app
 RUN pip install --no-cache-dir -r requirements.txt
+# Bake config files (overridden by ConfigMap mounts in production)
+COPY mapping.yaml /config/mapping.yaml
+COPY connectors/ /config/connectors/
 ENTRYPOINT ["python", "-m", "schema_manager"]
 ```
 
@@ -555,7 +674,7 @@ schema-manager/
 │   ├── component_gate.py    # Manage component_state table + advisory lock barrier
 │   ├── shadow.py            # Shadow mode policy, promotion, shadow_log queries
 │   ├── health.py            # /health, /ready, /promote endpoints
-│   └── watcher.py           # Watch loop: periodic config hash check
+│   └── watcher.py           # Watch loop: inotify on /config/ + periodic fallback
 ```
 
 ## Startup Ordering (After Implementation)
