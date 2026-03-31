@@ -109,6 +109,7 @@ Phase 1 is polling/scheduled-sync first (no webhook dependency).
 | Write-Back & Governance | [Deletion Conflict Policies](sync/deletion-conflict-policies.md) | Delete-vs-update conflict handling | Optional policy hardening |
 | Platform & Operations | [API Gateway & Traffic Control](ops/api-gateway-traffic-control.md) | API gateway controls for ingress/egress | For event-driven and higher-scale operation |
 | Platform & Operations | [Traceability](ops/traceability.md) | Audit trail for all writes | OpenTelemetry + audit table |
+| Platform & Operations | [Entity Lineage Trace](ops/entity-lineage.md) | Follow an entity src→golden→target and back | Entity event log + SQL DAG + optional Jaeger |
 | Platform & Operations | [Monitoring](ops/monitoring.md) | Dashboards & alerting | Prometheus+Grafana + Dagster UI |
 | Platform & Operations | [Alternative Backends](ops/alternative-backends.md) | Other warehouse/runtime choices | Snowflake, DuckDB |
 | Transformation & Modeling | [Last Modified Wins](model/last-modified-wins.md) | Per-field timestamp conflict resolution | Requires source timestamps |
