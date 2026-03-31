@@ -281,11 +281,81 @@ Step 3: Generated views + stream tables
         ├── DROP all objects in the generated layer
         ├── Run osi-engine render mapping.yaml → matviews.sql
         ├── Run convert_matviews_to_pgtrickle.py → pgtrickle.sql
+        ├── Validate generated SQL against actual DB (EXPLAIN each view)  ← NEW
         └── Apply pgtrickle.sql (creates stream tables + views)
 
 Step 3 depends on Steps 1 and 2 because the generated views join
-staging tables and entity_cluster_member.
+staging tables and entity_cluster_member. The validation step catches
+any mismatch between the Alembic-managed operational schema and the
+generated view SQL before any DDL is applied.
 ```
+
+## Cross-Component Schema Contract Validation
+
+The schema-manager applies Alembic migrations and then generates views from `mapping.yaml`. These two are authored independently — an Alembic revision could rename or drop a column that the views reference, or `mapping.yaml` could reference a column that hasn't been added yet. Neither author necessarily knows what the other owns.
+
+The schema-manager catches this mismatch **before applying any DDL** using PostgreSQL's `EXPLAIN` to validate each generated view against the actual database state.
+
+### How it works
+
+After Alembic runs (so operational tables are up to date) and after osi-engine generates view SQL, the schema-manager extracts the `SELECT` body of each view and runs `EXPLAIN` against the live database:
+
+```python
+def validate_generated_sql(db, matviews_sql: str) -> None:
+    """
+    Parse each CREATE MATERIALIZED VIEW ... AS SELECT ...
+    Run EXPLAIN on the SELECT body to resolve all column and table references
+    against the current database schema. Raises ValidationError on first failure.
+    """
+    for view_name, select_sql in extract_view_bodies(matviews_sql):
+        try:
+            db.execute(f"EXPLAIN {select_sql}")
+        except Exception as e:
+            raise ValidationError(
+                f"View '{view_name}' is invalid: {e}\n"
+                f"Check that mapping.yaml and the current Alembic schema are consistent."
+            )
+```
+
+`EXPLAIN` resolves all column and table references without executing the query. It catches:
+- Missing columns (Alembic removed a column the view references)
+- Missing tables (a staging stub was not created, or Alembic dropped a table)
+- Renamed columns (Alembic renamed something mapping.yaml still uses the old name for)
+- Wrong types (a join key type mismatch that would cause a runtime error)
+
+If validation fails, the schema-manager aborts the reconcile with a clear error message. **No DDL has been applied** at this point — the old views remain intact, components continue on their previous state.
+
+### Validation in the DDL pipeline
+
+The validation step runs between Alembic and the DROP:
+
+```
+1. Create/update staging table stubs
+2. Run Alembic upgrade
+3. Generate SQL: osi-engine render → convert → matviews.sql
+4. EXPLAIN-validate matviews.sql against current DB   ← catches mismatches here
+5. DROP existing generated views and stream tables
+6. Apply validated pgtrickle.sql
+```
+
+Running validation before the DROP means the old views are never removed if the new ones are invalid — no downtime window from a bad migration.
+
+### CI enforcement
+
+`EXPLAIN` validation at deployment time catches problems early, but the ideal is to catch them earlier still — at PR authoring time, before merge.
+
+Add a CI integration test in the `vendor/in-and-out` repo (which owns Alembic) that:
+1. Spins up Postgres + pg-trickle via testcontainers
+2. Checks out the current `mapping.yaml` from the outer `sesam-opensource-poc` repo (via submodule reference or pinned path)
+3. Runs the full schema-manager reconcile with the new Alembic revision
+4. Verifies EXPLAIN passes for all generated views
+
+This means any PR to `vendor/in-and-out` that breaks the mapping contract will fail CI before merge. The schema-manager's EXPLAIN validation acts as a runtime safety net for cases not covered by CI (e.g., `mapping.yaml` changed without a corresponding in-and-out change).
+
+### What validation does NOT catch
+
+- **Semantic errors**: a view that references the right columns but produces wrong results (e.g., wrong join condition). This is caught by shadow mode — writeback computes diffs against the shadow log for human review.
+- **pg-trickle-specific failures**: some stream table definitions may fail at apply time even if the underlying SELECT is valid. These are caught at step 6 when the transaction fails and rolls back.
 
 ## Staging Table Stub Creation
 
@@ -671,6 +741,7 @@ schema-manager/
 │   ├── osi.py               # Call osi-engine render + convert script
 │   ├── alembic_runner.py    # Call inandout db upgrade as subprocess
 │   ├── applier.py           # Apply generated SQL to Postgres
+│   ├── validator.py         # EXPLAIN-based validation of generated views
 │   ├── component_gate.py    # Manage component_state table + advisory lock barrier
 │   ├── shadow.py            # Shadow mode policy, promotion, shadow_log queries
 │   ├── health.py            # /health, /ready, /promote, /metrics endpoints
@@ -749,6 +820,7 @@ The classification is determined by diffing the old and new config:
 | Postgres unreachable | Schema-manager retries with exponential backoff. Components stay stopped. |
 | osi-engine render fails | Schema-manager logs error, does not apply partial DDL, components stay stopped. Retry on next watch cycle. |
 | Alembic upgrade fails | Same — log, skip, retry. |
+| Generated SQL EXPLAIN validation fails | Schema-manager aborts reconcile. No DDL applied — old views remain intact. Clear error message names the failing view and the missing column/table. Components stay on previous state. Retry on next watch cycle. |
 | Generated SQL apply fails | Transaction rolls back. Old views remain (if this is a re-deploy) or no views exist (first deploy). Components stay stopped. |
 | Schema-manager crashes | Components remain in their last `desired` state. Exclusive advisory lock is auto-released (session closes). If components were running, they continue (safe — schema hasn't changed). On restart, re-enters reconcile loop. |
 | Component replica crashes | Shared advisory lock auto-released (session closes). Schema-manager is not blocked. Kubernetes restartPolicy handles the restart; new replica will check `component_state` on startup. |
@@ -1140,6 +1212,7 @@ schema-manager/
 │   │   ├── test_reconcile.py
 │   │   ├── test_advisory_locks.py
 │   │   ├── test_shadow_mode.py
+│   │   ├── test_validation.py   # EXPLAIN validation: missing cols, renamed tables
 │   │   └── test_leader_election.py
 │   └── e2e/
 │       └── test_full_deploy.py  # requires kind cluster
