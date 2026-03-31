@@ -50,6 +50,113 @@ Ingest and writeback poll this table on a short interval (e.g. 5 s). When `desir
 
 This approach works identically inside Kubernetes, in Docker Compose, or running processes locally — no platform API calls required.
 
+## Multi-Replica Coordination: Advisory Lock Barrier
+
+Ingest and writeback can each run multiple replicas. The `component_state` table tells replicas **what to do**, but the schema-manager also needs to know **when every replica has actually stopped** before applying DDL. Polling `/ready` on a Kubernetes Service is useless here — it load-balances to a random replica.
+
+The solution uses PostgreSQL advisory locks as a barrier:
+
+- Each replica holds a **shared advisory lock** while doing work
+- The schema-manager acquires an **exclusive advisory lock** before applying DDL
+- Postgres guarantees the exclusive lock blocks until all shared locks are released
+
+```
+                     Advisory lock key: 0x5E5A0001
+
+ Replica work cycle:              Schema-manager migration:
+
+ pg_advisory_lock_shared(key)     1. SET desired = 'stopped'
+ ... do one work cycle ...        2. pg_advisory_lock(key)  ← BLOCKS
+ pg_advisory_unlock_shared(key)      until all shared locks released
+ check desired → stopped? skip    3. ... apply DDL ...
+                                  4. pg_advisory_unlock(key)
+                                  5. SET desired = 'running'
+```
+
+This works because:
+- Multiple replicas can hold a shared lock simultaneously (they don't block each other)
+- The exclusive lock blocks until **all** shared locks are released
+- If a replica crashes, its database session closes and the shared lock is auto-released
+- No registration table, no heartbeats, no replica counting
+
+### Replica work loop pattern
+
+Every replica (ingest or writeback) follows this pattern:
+
+```python
+LOCK_KEY = 0x5E5A_0001  # fixed key for schema barrier
+
+while True:
+    state = db.execute(
+        "SELECT desired FROM component_state WHERE component = %s", [self.name]
+    ).scalar()
+
+    if state != 'running':
+        time.sleep(5)
+        continue
+
+    # Acquire shared lock — multiple replicas hold this simultaneously
+    db.execute("SELECT pg_advisory_lock_shared(%s)", [LOCK_KEY])
+    try:
+        # Re-check after acquiring lock (schema-manager may have set stopped
+        # between our check and lock acquisition — prevents TOCTOU race)
+        state = db.execute(
+            "SELECT desired FROM component_state WHERE component = %s", [self.name]
+        ).scalar()
+        if state != 'running':
+            continue  # unlock in finally, then retry
+
+        # ... do one work cycle ...
+    finally:
+        db.execute("SELECT pg_advisory_unlock_shared(%s)", [LOCK_KEY])
+```
+
+Key details:
+- The shared lock is held only for **one work cycle**, not permanently
+- The double-check after lock acquisition prevents a TOCTOU race
+- The `finally` block guarantees unlock even if the cycle crashes
+
+### Schema-manager migration sequence
+
+```python
+LOCK_KEY = 0x5E5A_0001
+
+def apply_migration(db, config):
+    # 1. Signal all replicas to stop
+    db.execute("UPDATE component_state SET desired = 'stopped'")
+
+    # 2. Wait for all replicas to finish their current work cycle.
+    #    Blocks until every shared lock on LOCK_KEY is released.
+    db.execute("SELECT pg_advisory_lock(%s)", [LOCK_KEY])
+
+    try:
+        # 3. No replica is doing work. Any replica that tries will either:
+        #    - See desired = 'stopped' and skip, or
+        #    - Block on pg_advisory_lock_shared() because we hold exclusive
+        apply_ddl(db, config)
+    finally:
+        # 4. Release exclusive lock
+        db.execute("SELECT pg_advisory_unlock(%s)", [LOCK_KEY])
+
+    # 5. Wait for streams to rebuild, then resume
+    wait_for_streams_ready(db)
+    db.execute(
+        "UPDATE component_state SET desired = 'running' "
+        "WHERE component IN ('ingest', 'writeback')"
+    )
+```
+
+### Edge cases
+
+| Scenario | What happens |
+|----------|-------------|
+| Replica mid-batch when `desired = 'stopped'` | Finishes current cycle, releases shared lock, sees stopped, idles. Schema-manager's exclusive lock succeeds. |
+| Replica crashes mid-batch | Database session closes → shared lock auto-released. Schema-manager proceeds. |
+| New replica starts during migration | Sees `desired = 'stopped'`, never acquires shared lock, idles. |
+| New replica races to acquire lock during migration | `pg_advisory_lock_shared()` blocks because schema-manager holds exclusive. Replica waits, then re-checks desired state. |
+| Schema-manager crashes mid-DDL | Transaction rolls back. Exclusive lock auto-released. Replicas see `desired = 'stopped'`, stay idle. Schema-manager restarts, retries. |
+| Schema-manager crashes after DDL, before setting `running` | Replicas stay stopped. Schema-manager restarts, detects hash matches, skips DDL, sets `running`. |
+
 ## Schema-Manager Lifecycle
 
 ```
@@ -78,7 +185,7 @@ startup
 │
 ├─► If hash changed OR schema missing:
 │   ├── Stop components: SET desired = 'stopped'
-│   ├── Wait for components to acknowledge (health endpoint reports idle)
+│   ├── Acquire exclusive advisory lock (blocks until all replicas idle)
 │   ├── Apply DDL in dependency order:
 │   │   1. Create/update staging table stubs (from sources: in mapping.yaml)
 │   │   2. Run Alembic upgrade (operational tables)
@@ -86,6 +193,7 @@ startup
 │   │   4. Call osi-engine render → SQL
 │   │   5. Convert to pg-trickle stream SQL
 │   │   6. Apply generated SQL in a transaction
+│   ├── Release exclusive advisory lock
 │   ├── Wait for stream tables to be populated (row count > 0 or watermark)
 │   └── Update schema_version in component_state
 │
@@ -183,18 +291,7 @@ Required changes:
 
 2. **Remove Alembic dependency.** The ingest image no longer needs to bundle Alembic or run `inandout db upgrade`. This command moves to the schema-manager.
 
-3. **Add component_state polling.** The ingest main loop must check `component_state` and pause when `desired = 'stopped'`:
-   ```python
-   while True:
-       state = db.execute(
-           "SELECT desired FROM component_state WHERE component = 'ingest'"
-       ).scalar()
-       if state != 'running':
-           log.info("Paused by schema-manager, waiting...")
-           time.sleep(5)
-           continue
-       # ... normal ingest cycle ...
-   ```
+3. **Add component_state polling with advisory lock barrier.** The ingest main loop must check `component_state`, acquire a shared advisory lock for each work cycle, and pause when `desired = 'stopped'`. See the replica work loop pattern in the [Multi-Replica Coordination](#multi-replica-coordination-advisory-lock-barrier) section. This ensures that the schema-manager can wait for all replicas to finish their current cycle before applying DDL.
 
 4. **Remove the wait-for-migrations init container.** The schema-manager handles all ordering. The ingest deployment no longer needs the init container that polls for `alembic_version`.
 
@@ -204,18 +301,7 @@ Required changes:
 
 Same pattern as ingest:
 
-1. **Add component_state polling.** The writeback sync loop checks `desired` before processing the sync queue:
-   ```python
-   while True:
-       state = db.execute(
-           "SELECT desired FROM component_state WHERE component = 'writeback'"
-       ).scalar()
-       if state != 'running':
-           log.info("Paused by schema-manager, waiting...")
-           time.sleep(5)
-           continue
-       # ... normal writeback cycle (read sync_queue, diff, CAS write) ...
-   ```
+1. **Add component_state polling with advisory lock barrier.** Same pattern as ingest — see the [Multi-Replica Coordination](#multi-replica-coordination-advisory-lock-barrier) section. The writeback sync loop checks `desired`, acquires a shared advisory lock for each sync cycle, and pauses when stopped.
 
 2. **Remove the wait-for-migrations init container.** Same as ingest.
 
@@ -258,11 +344,7 @@ When a component starts up and finds no row in `component_state` for itself, it 
 
 ### Graceful pause
 
-When the schema-manager sets `desired = 'stopped'`, it then waits for the component to finish its current work cycle. It can verify this by:
-- Polling the component's `/ready` endpoint until it returns 503
-- Or checking a `current_state` column that the component updates (e.g. `'idle'`, `'processing'`)
-
-For the PoC, polling `/ready` is sufficient.
+When the schema-manager sets `desired = 'stopped'`, it acquires an exclusive advisory lock (`pg_advisory_lock(0x5E5A0001)`). This blocks until all replicas have finished their current work cycle and released their shared locks. No polling of individual replica health endpoints is needed — the lock is the definitive barrier, regardless of how many replicas are running.
 
 ## Migration State Tracking
 
@@ -421,7 +503,7 @@ schema-manager/
 │   ├── osi.py               # Call osi-engine render + convert script
 │   ├── alembic_runner.py    # Call inandout db upgrade as subprocess
 │   ├── applier.py           # Apply generated SQL to Postgres
-│   ├── component_gate.py    # Manage component_state table
+│   ├── component_gate.py    # Manage component_state table + advisory lock barrier
 │   ├── health.py            # /health and /ready endpoints
 │   └── watcher.py           # Watch loop: periodic config hash check
 ```
@@ -450,10 +532,10 @@ Steps 5-6 can happen concurrently — ingest and writeback are idling while the 
 1. Developer changes mapping.yaml (e.g. adds a field)
 2. skaffold dev detects change, rebuilds ConfigMap, rolls out
 3. Schema-manager's watch loop detects config hash change
-4. Schema-manager sets desired = 'stopped' for writeback
-5. Schema-manager waits for writeback to report idle
-6. Schema-manager sets desired = 'stopped' for ingest (if staging stubs changed)
-7. Schema-manager drops and recreates generated views + streams
+4. Schema-manager sets desired = 'stopped' for writeback (and ingest if staging stubs changed)
+5. Schema-manager acquires exclusive advisory lock (blocks until all replicas idle)
+6. Schema-manager drops and recreates generated views + streams
+7. Schema-manager releases exclusive advisory lock
 8. Schema-manager waits for stream tables to rebuild
 9. Schema-manager sets desired = 'running' for ingest, then writeback
 ```
@@ -468,8 +550,8 @@ If only mapping.yaml changed (no new sources), ingest can keep running during st
 | osi-engine render fails | Schema-manager logs error, does not apply partial DDL, components stay stopped. Retry on next watch cycle. |
 | Alembic upgrade fails | Same — log, skip, retry. |
 | Generated SQL apply fails | Transaction rolls back. Old views remain (if this is a re-deploy) or no views exist (first deploy). Components stay stopped. |
-| Schema-manager crashes | Components remain in their last `desired` state. If they were running, they continue running (safe — the schema hasn't changed). On schema-manager restart, it re-enters the reconcile loop. |
-| Component crashes | Schema-manager observes via health check. Can log/alert. Kubernetes restartPolicy handles the actual restart. |
+| Schema-manager crashes | Components remain in their last `desired` state. Exclusive advisory lock is auto-released (session closes). If components were running, they continue (safe — schema hasn't changed). On restart, re-enters reconcile loop. |
+| Component replica crashes | Shared advisory lock auto-released (session closes). Schema-manager is not blocked. Kubernetes restartPolicy handles the restart; new replica will check `component_state` on startup. |
 
 ## What Gets Deleted
 
@@ -499,4 +581,4 @@ If only mapping.yaml changed (no new sources), ingest can keep running during st
 
 - Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on the periodic watch loop?
 - How should we detect that pg-trickle stream tables are "fully populated" after recreation? Row count comparison, a watermark table, or a fixed delay?
-- Should we add a `component_state.current_state` column for components to report back (`idle`, `processing`, `error`), or is polling `/ready` sufficient?
+- Should ingest and writeback use separate advisory lock keys so that ingest can keep running while only writeback is paused during view-only changes? (Current design uses a single key for simplicity.)
