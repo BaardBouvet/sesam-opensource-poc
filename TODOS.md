@@ -2,10 +2,12 @@
 
 ## Dos
 
+- remove the matview script of the osi-mapping dockerfile, no need
+- we can also just move the osi-mapping build into the schema-manager dockerfile, no need to keep it alone
 - inandout engine handle sigterm
 - ingest, find a better way to signal that the input_src_ tables are ready so we don't have to hardcode that in the pgtrickle-setup container
 - we also need to update last modified timestamp after an update from the api
-- should also set these properites when editing the json (both insert and update) from the ui by default, but we could leave toggle to override to override that behaviour in case the user want's to simulate some explicit timestamp situation
+- simulator diff doesn't look good with the hubspot "properties" wrapper
 
 ## Not yet
 

@@ -73,6 +73,12 @@ mappings:
     target: person
     last_modified:
       expression: "data->'properties'->>'lastmodifieddate'"
+    written_state:
+      table: inout_dst_hubspot_contacts_lwstate
+      cluster_id: cluster_id
+      written: data
+      written_at: _written_at
+    derive_timestamps: true
     fields:
       - source_path: data.properties.email
         target: email
@@ -90,6 +96,12 @@ mappings:
     target: person
     last_modified:
       expression: "data->>'changesUntil'"
+    written_state:
+      table: inout_dst_tripletex_contacts_lwstate
+      cluster_id: cluster_id
+      written: data
+      written_at: _written_at
+    derive_timestamps: true
     fields:
       - source_path: data.email
         target: email
@@ -107,6 +119,12 @@ mappings:
     target: company
     last_modified:
       expression: "data->'properties'->>'lastmodifieddate'"
+    written_state:
+      table: inout_dst_hubspot_companies_lwstate
+      cluster_id: cluster_id
+      written: data
+      written_at: _written_at
+    derive_timestamps: true
     fields:
       - source_path: data.properties.domain
         target: domain
@@ -121,6 +139,12 @@ mappings:
     target: company
     last_modified:
       expression: "data->>'changesUntil'"
+    written_state:
+      table: inout_dst_tripletex_customers_lwstate
+      cluster_id: cluster_id
+      written: data
+      written_at: _written_at
+    derive_timestamps: true
     fields:
       - source_path: data.organizationNumber
         target: org_number
@@ -139,6 +163,11 @@ mappings:
   - name: hubspot_associations
     source: hubspot_associations
     target: person_company_association
+    written_state:
+      table: inout_dst_hubspot_associations_lwstate
+      cluster_id: cluster_id
+      written: data
+      written_at: _written_at
     fields:
       - source_path: data.fromObjectId
         target: person_id
