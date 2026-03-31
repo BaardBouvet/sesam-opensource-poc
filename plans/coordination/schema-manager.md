@@ -84,7 +84,8 @@ This works because:
 Every replica (ingest or writeback) follows this pattern:
 
 ```python
-LOCK_KEY = 0x5E5A_0001  # fixed key for schema barrier
+INGEST_LOCK_KEY    = 0x5E5A_0001  # ingest barrier
+WRITEBACK_LOCK_KEY = 0x5E5A_0002  # writeback barrier
 
 while True:
     state = db.execute(
@@ -95,8 +96,10 @@ while True:
         time.sleep(5)
         continue
 
+    lock_key = INGEST_LOCK_KEY if self.name == 'ingest' else WRITEBACK_LOCK_KEY
+
     # Acquire shared lock — multiple replicas hold this simultaneously
-    db.execute("SELECT pg_advisory_lock_shared(%s)", [LOCK_KEY])
+    db.execute("SELECT pg_advisory_lock_shared(%s)", [lock_key])
     try:
         # Re-check after acquiring lock (schema-manager may have set stopped
         # between our check and lock acquisition — prevents TOCTOU race)
@@ -108,7 +111,7 @@ while True:
 
         # ... do one work cycle ...
     finally:
-        db.execute("SELECT pg_advisory_unlock_shared(%s)", [LOCK_KEY])
+        db.execute("SELECT pg_advisory_unlock_shared(%s)", [lock_key])
 ```
 
 Key details:
@@ -119,24 +122,30 @@ Key details:
 ### Schema-manager migration sequence
 
 ```python
-LOCK_KEY = 0x5E5A_0001
+INGEST_LOCK_KEY    = 0x5E5A_0001
+WRITEBACK_LOCK_KEY = 0x5E5A_0002
 
-def apply_migration(db, config):
-    # 1. Signal all replicas to stop
-    db.execute("UPDATE component_state SET desired = 'stopped'")
+def apply_migration(db, config, tier):
+    # 1. Signal affected replicas to stop
+    if tier >= 2:
+        db.execute("UPDATE component_state SET desired = 'stopped'")
+    else:
+        db.execute("UPDATE component_state SET desired = 'stopped' WHERE component = 'writeback'")
 
-    # 2. Wait for all replicas to finish their current work cycle.
-    #    Blocks until every shared lock on LOCK_KEY is released.
-    db.execute("SELECT pg_advisory_lock(%s)", [LOCK_KEY])
+    # 2. Acquire exclusive locks for affected components.
+    #    Blocks until all shared locks on each key are released.
+    if tier >= 2:
+        db.execute("SELECT pg_advisory_lock(%s)", [INGEST_LOCK_KEY])
+    db.execute("SELECT pg_advisory_lock(%s)", [WRITEBACK_LOCK_KEY])
 
     try:
-        # 3. No replica is doing work. Any replica that tries will either:
-        #    - See desired = 'stopped' and skip, or
-        #    - Block on pg_advisory_lock_shared() because we hold exclusive
+        # 3. No affected replica is doing work.
         apply_ddl(db, config)
     finally:
-        # 4. Release exclusive lock
-        db.execute("SELECT pg_advisory_unlock(%s)", [LOCK_KEY])
+        # 4. Release exclusive locks
+        db.execute("SELECT pg_advisory_unlock(%s)", [WRITEBACK_LOCK_KEY])
+        if tier >= 2:
+            db.execute("SELECT pg_advisory_unlock(%s)", [INGEST_LOCK_KEY])
 
     # 5. Wait for streams to rebuild, then resume
     wait_for_streams_ready(db)
@@ -157,12 +166,48 @@ def apply_migration(db, config):
 | Schema-manager crashes mid-DDL | Transaction rolls back. Exclusive lock auto-released. Replicas see `desired = 'stopped'`, stay idle. Schema-manager restarts, retries. |
 | Schema-manager crashes after DDL, before setting `running` | Replicas stay stopped. Schema-manager restarts, detects hash matches, skips DDL, sets `running`. |
 
+## Schema-Manager Leader Election
+
+If Kubernetes restarts the schema-manager pod (OOM, node drain, rolling update), there is a brief window where two instances overlap. Both would try to set `desired = 'stopped'` and acquire the exclusive migration lock. While the lock prevents concurrent DDL, the loser could set `desired = 'stopped'` after the winner already set `running` — bouncing all replicas.
+
+The schema-manager must acquire a **leader advisory lock** on startup and hold it for its entire lifetime:
+
+```python
+LEADER_LOCK_KEY = 0x5E5A_0000  # distinct from the migration barrier key
+
+def try_become_leader(db) -> bool:
+    """Non-blocking attempt to become leader. Returns True if acquired."""
+    return db.execute(
+        "SELECT pg_try_advisory_lock(%s)", [LEADER_LOCK_KEY]
+    ).scalar()
+```
+
+Behaviour:
+- On startup, the schema-manager calls `pg_try_advisory_lock()` (non-blocking)
+- If it succeeds, this instance is the leader and runs the reconcile loop
+- If it fails, another instance already holds the lock — this instance logs a warning and exits (Kubernetes restart policy will retry later, by which time the old instance is gone)
+- When the leader's database session closes (crash, shutdown), the lock is auto-released and the next instance can claim it
+
+This uses the same advisory lock mechanism as the migration barrier, so no additional infrastructure is needed. The leader lock key (`0x5E5A0000`) is distinct from the migration barrier key (`0x5E5A0001`).
+
+## Database Connection Lifecycle for Advisory Locks
+
+Advisory locks are **session-scoped** — they are tied to the database connection that acquired them. If a connection pool rotates or recycles connections, the lock silently disappears. This applies to both the schema-manager and all component replicas.
+
+Rules:
+- The schema-manager **must** use a **dedicated, long-lived connection** for the leader lock. This connection is held for the lifetime of the process. A separate connection (or pool) can be used for other queries.
+- The schema-manager's migration sequence must use the **same connection** for `pg_advisory_lock()` and `pg_advisory_unlock()`. If using a pool, pin the connection for the duration of the migration.
+- Component replicas must use the **same connection** for `pg_advisory_lock_shared()` and `pg_advisory_unlock_shared()` within a single work cycle. Since the lock is acquired and released within one cycle, this is straightforward: use a single connection (not from a pool) or pin a pooled connection for the cycle.
+
+In practice, this means using SQLAlchemy's `engine.connect()` (dedicated connection) rather than `Session` (which may return connections to the pool between statements).
+
 ## Schema-Manager Lifecycle
 
 ```
 startup
 │
 ├─► Connect to Postgres, wait for readiness
+├─► Acquire leader lock (exit if another instance holds it)
 ├─► Ensure component_state table exists
 ├─► Set desired = 'stopped' for all components
 │
@@ -344,7 +389,7 @@ When a component starts up and finds no row in `component_state` for itself, it 
 
 ### Graceful pause
 
-When the schema-manager sets `desired = 'stopped'`, it acquires an exclusive advisory lock (`pg_advisory_lock(0x5E5A0001)`). This blocks until all replicas have finished their current work cycle and released their shared locks. No polling of individual replica health endpoints is needed — the lock is the definitive barrier, regardless of how many replicas are running.
+When the schema-manager sets `desired = 'stopped'`, it acquires the relevant exclusive advisory lock(s) (`WRITEBACK_LOCK_KEY` for tier 1 changes, both `INGEST_LOCK_KEY` and `WRITEBACK_LOCK_KEY` for tier 2/3). This blocks until all affected replicas have finished their current work cycle and released their shared locks. No polling of individual replica health endpoints is needed — the locks are the definitive barrier, regardless of how many replicas are running.
 
 ## Migration State Tracking
 
@@ -532,15 +577,42 @@ Steps 5-6 can happen concurrently — ingest and writeback are idling while the 
 1. Developer changes mapping.yaml (e.g. adds a field)
 2. skaffold dev detects change, rebuilds ConfigMap, rolls out
 3. Schema-manager's watch loop detects config hash change
-4. Schema-manager sets desired = 'stopped' for writeback (and ingest if staging stubs changed)
-5. Schema-manager acquires exclusive advisory lock (blocks until all replicas idle)
+4. Schema-manager sets desired = 'stopped' for writeback (and ingest if tier 2/3)
+5. Schema-manager acquires exclusive advisory lock(s) for affected components
 6. Schema-manager drops and recreates generated views + streams
-7. Schema-manager releases exclusive advisory lock
+7. Schema-manager releases exclusive advisory lock(s)
 8. Schema-manager waits for stream tables to rebuild
-9. Schema-manager sets desired = 'running' for ingest, then writeback
+9. Schema-manager sets desired = 'running' for affected components
 ```
 
-If only mapping.yaml changed (no new sources), ingest can keep running during steps 6-8 — it writes to staging tables that are unaffected by view recreation. Only writeback must be stopped to prevent it from reading partially-rebuilt views.
+If only mapping.yaml changed (no new sources), this is a tier 1 change: ingest can keep running during steps 4-8 — it writes to staging tables that are unaffected by view recreation. Only writeback must be stopped to prevent it from reading partially-rebuilt views.
+
+## Change Classification
+
+Not all config changes have the same impact. The schema-manager classifies changes into tiers to minimise disruption:
+
+| Tier | Trigger | What stops | What keeps running |
+|------|---------|-----------|-------------------|
+| **Tier 0: No-op** | Config hash unchanged | Nothing | Everything |
+| **Tier 1: Views only** | mapping.yaml field/strategy change (no new sources) | Writeback only | Ingest |
+| **Tier 2: Sources + views** | New source in mapping.yaml, or new connector entity | Both ingest and writeback | — |
+| **Tier 3: Operational schema** | New Alembic revision (in-and-out upgrade) | Both ingest and writeback | — |
+
+To support tiered pausing, ingest and writeback use **separate advisory lock keys**:
+
+```python
+INGEST_LOCK_KEY    = 0x5E5A_0001
+WRITEBACK_LOCK_KEY = 0x5E5A_0002
+```
+
+The schema-manager acquires only the locks it needs:
+- Tier 1: acquire `WRITEBACK_LOCK_KEY` only
+- Tier 2/3: acquire both `INGEST_LOCK_KEY` and `WRITEBACK_LOCK_KEY`
+
+The classification is determined by diffing the old and new config:
+- If only `mappings:` or `targets:` sections changed → Tier 1
+- If `sources:` section changed or new connector entities appeared → Tier 2
+- If the Alembic head revision changed → Tier 3
 
 ## Error Handling
 
@@ -552,6 +624,38 @@ If only mapping.yaml changed (no new sources), ingest can keep running during st
 | Generated SQL apply fails | Transaction rolls back. Old views remain (if this is a re-deploy) or no views exist (first deploy). Components stay stopped. |
 | Schema-manager crashes | Components remain in their last `desired` state. Exclusive advisory lock is auto-released (session closes). If components were running, they continue (safe — schema hasn't changed). On restart, re-enters reconcile loop. |
 | Component replica crashes | Shared advisory lock auto-released (session closes). Schema-manager is not blocked. Kubernetes restartPolicy handles the restart; new replica will check `component_state` on startup. |
+
+## Rollback Strategy
+
+The checksum-gated approach means a bad `mapping.yaml` (e.g., wrong merge strategy) can produce technically valid but semantically wrong golden records. If writeback is enabled, those wrong records get pushed to production APIs before anyone notices.
+
+Mitigations:
+
+1. **Store previous generated SQL.** The schema-manager stores the last-known-good generated SQL (matviews.sql content) in the `migration_state` table as a `previous_sql` entry. If a rollback is needed, the operator can invoke `schema-manager rollback` which restores the previous SQL and re-applies it.
+
+2. **Dry-run mode.** The schema-manager supports a `--dry-run` flag (and `/reconcile?dry_run=true` endpoint) that computes and logs the diff without applying DDL or restarting components. This allows operators to preview what a config change will do.
+
+3. **Git is the source of truth.** Since `mapping.yaml` is version-controlled, a `git revert` followed by redeployment is always an option. The schema-manager will detect the hash change and re-apply. Combined with the checksum gate, this is fast.
+
+4. **Extended shadow mode for onboarding.** New mapping configurations will be validated through an extended shadow mode before writeback is enabled against production APIs. This is handled outside the schema-manager and documented separately.
+
+## Database Users and Privilege Separation
+
+The plan designates the schema-manager as the only DDL writer, but all components currently connect as the same `inandout` PostgreSQL user. To enforce this guarantee, use separate database users:
+
+| User | Used by | Privileges |
+|------|---------|------------|
+| `sesam_admin` | schema-manager | `CREATE`, `ALTER`, `DROP` on all schemas. Full DDL. Owns all tables and views. |
+| `sesam_ingest` | ingest replicas | `INSERT`, `UPDATE` on `inout_src_*` staging tables. `SELECT` on `component_state`. No DDL. |
+| `sesam_writeback` | writeback replicas | `SELECT` on generated views, `SELECT`/`INSERT`/`UPDATE` on `sync_state`, `sync_task`, `cross_system_link`. `SELECT` on `component_state`. No DDL. |
+
+This prevents a bug in ingest from accidentally altering tables, and makes the single-owner guarantee enforceable at the database level rather than by convention alone.
+
+Implementation:
+- The schema-manager creates these users and grants privileges as part of its DDL application step
+- The `sesam-credentials` Secret gains additional DSN entries (`INGEST_DATABASE_URL`, `WRITEBACK_DATABASE_URL`) with the restricted users
+- The `inandout-config` ConfigMap references the appropriate DSN per component
+- Advisory locks work across users — a shared lock acquired by `sesam_ingest` is visible to `sesam_admin`'s exclusive lock request
 
 ## What Gets Deleted
 
@@ -581,4 +685,3 @@ If only mapping.yaml changed (no new sources), ingest can keep running during st
 
 - Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on the periodic watch loop?
 - How should we detect that pg-trickle stream tables are "fully populated" after recreation? Row count comparison, a watermark table, or a fixed delay?
-- Should ingest and writeback use separate advisory lock keys so that ingest can keep running while only writeback is paused during view-only changes? (Current design uses a single key for simplicity.)
