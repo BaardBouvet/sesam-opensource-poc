@@ -112,6 +112,17 @@ spec:
                 SELECT pgtrickle.alter_stream_table('_delta_tripletex_contacts',   schedule => '1s');
                 SELECT pgtrickle.alter_stream_table('_delta_hubspot_associations', schedule => '1s');
               "
+
+              echo "Setting FULL refresh on intermediate tables (fwd/id/resolved/rev/golden-record)..."
+              # pgtrickle 0.12 removed the automatic full-fallback for wide joins (0.11 behaviour).
+              # Intermediate tables that carry a _base jsonb column cannot use DIFFERENTIAL mode
+              # because the DVM engine generates max(jsonb) which PostgreSQL does not support.
+              # Apply FULL to every table except the _delta_* leaf tables.
+              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+                SELECT pgtrickle.alter_stream_table(pgt_name, refresh_mode => 'FULL')
+                FROM pgtrickle.pgt_stream_tables
+                WHERE pgt_name NOT LIKE '_delta_%';
+              "
               echo "pg_trickle setup complete."
               exec sleep infinity
           envFrom:

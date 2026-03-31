@@ -43,6 +43,8 @@ spec:
             - "max_worker_processes=16"
             - "-c"
             - "max_locks_per_transaction=1024"
+            - "-c"
+            - "pg_trickle.cdc_mode=trigger"
           ports:
             - containerPort: 5432
           env:
