@@ -105,6 +105,7 @@ connector:
         history_mode: overwrite
         schedule:
           interval: "5m"
+          max_lag_seconds: 600
         list:
           method: GET
           path: /crm/v3/objects/contacts
@@ -174,6 +175,7 @@ connector:
         history_mode: overwrite
         schedule:
           interval: "5m"
+          max_lag_seconds: 600
         list:
           method: GET
           path: /crm/v3/objects/companies
@@ -245,6 +247,7 @@ connector:
         history_mode: overwrite
         schedule:
           interval: "10m"
+          max_lag_seconds: 1200
         list:
           method: GET
           path: /crm/v3/associations/contacts/companies/batch/read

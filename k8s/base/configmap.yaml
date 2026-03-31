@@ -15,6 +15,7 @@ data:
     namespace: public
     health_server:
       listen: "0.0.0.0:9090"
+    webhook_callback_base_url: "http://inandout-ingest.sesam-poc.svc.cluster.local:9090"
     observability:
       logging:
         format: json

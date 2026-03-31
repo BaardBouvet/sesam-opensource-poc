@@ -56,10 +56,9 @@ build:
           - src: "vendor/schema-manager/schema_manager/**/*.py"
             dest: /usr/local/lib/python3.13/site-packages
             strip: "vendor/schema-manager/"
-          - src: "mapping.yaml"
-            dest: /config
-          - src: "connectors/*.yaml"
-            dest: /config/connectors
+          # mapping.yaml and connectors/*.yaml are mounted from ConfigMaps
+          # (read-only). Changes to those files trigger a full kustomize
+          # redeploy which regenerates the ConfigMaps — file sync is not used.
 
     # ── Sesam Dashboard (operational UI) ─────────────────────────────────────
     - image: sesam-dashboard

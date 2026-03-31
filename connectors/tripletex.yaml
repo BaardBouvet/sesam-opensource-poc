@@ -102,9 +102,9 @@ connector:
     # IpAllowlistMiddleware. The engine has no dev-mode bypass either, so if
     # you run the engine locally against the simulator you must either empty
     # this list or arrange for the correct source IP to be visible.
-    ip_allowlist:
-      - 18.97.193.0/27
-      - 18.96.32.192/27
+    # ip_allowlist:
+    #   - 18.97.193.0/27
+    #   - 18.96.32.192/27
 
   datatypes:
     customers:
@@ -116,6 +116,7 @@ connector:
         history_mode: overwrite
         schedule:
           interval: "10m"
+          max_lag_seconds: 1200
         list:
           method: GET
           path: /customer
@@ -193,6 +194,7 @@ connector:
         history_mode: overwrite
         schedule:
           interval: "10m"
+          max_lag_seconds: 1200
         list:
           method: GET
           path: /contact

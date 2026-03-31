@@ -49,7 +49,17 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: sesam-credentials
-                  key: INOUT_DATABASE_URL
+                  key: SIMULATOR_DATABASE_URL
+            - name: INOUT_CREDENTIAL_HUBSPOT_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sesam-credentials
+                  key: INOUT_CREDENTIAL_HUBSPOT_WEBHOOK_SECRET
+            - name: INOUT_CREDENTIAL_TRIPLETEX_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: sesam-credentials
+                  key: INOUT_CREDENTIAL_TRIPLETEX_WEBHOOK_SECRET
           ports:
             - name: http
               containerPort: 6100

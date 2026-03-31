@@ -1,712 +1,712 @@
 {
-    "title": "Sesam PoC \u2014 Service Health",
-    "uid": "sesam-overview",
-    "schemaVersion": 36,
-    "version": 1,
-    "refresh": "30s",
-    "time": {
-        "from": "now-5m",
-        "to": "now"
-    },
-    "panels": [
-        {
-            "id": 1,
-            "type": "stat",
-            "title": "PostgreSQL",
-            "description": "pg_up from postgres-exporter: 1 = exporter can connect to Postgres",
-            "gridPos": {
-                "x": 0,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
-                },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 1
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "NO DATA",
-                                    "color": "dark-red",
-                                    "index": 2
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "NO DATA",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "pg_up * 2",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
-                }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            }
+  "title": "Sesam PoC \u2014 Service Health",
+  "uid": "sesam-overview",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "PostgreSQL",
+      "description": "pg_up from postgres-exporter: 1 = exporter can connect to Postgres",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
         },
-        {
-            "id": 2,
-            "type": "stat",
-            "title": "pg-trickle",
-            "description": "pgtrickle.quick_health: OK / WARNING (stale/error tables) / CRITICAL",
-            "gridPos": {
-                "x": 4,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 0
                 },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "CRITICAL",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "1": {
-                                    "text": "WARNING",
-                                    "color": "orange",
-                                    "index": 1
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 2
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "NO DATA",
-                                    "color": "dark-red",
-                                    "index": 3
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "NO DATA",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "2 - pg_trickle_health_health_status_code",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 1
                 }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "NO DATA",
+                  "color": "dark-red",
+                  "index": 2
+                }
+              }
             }
-        },
-        {
-            "id": 3,
-            "type": "stat",
-            "title": "Ingest",
-            "description": "DOWN if scrape fails; DEGRADED if any circuit breaker is open or half-open",
-            "gridPos": {
-                "x": 8,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
-                },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "1": {
-                                    "text": "DEGRADED",
-                                    "color": "orange",
-                                    "index": 1
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 2
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 3
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "DOWN",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "clamp_min(up{job=\"inandout-ingest\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-ingest\"} > 0) or vector(0), 1), 0)",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
-                }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            }
-        },
-        {
-            "id": 4,
-            "type": "stat",
-            "title": "Writeback",
-            "description": "DOWN if scrape fails; DEGRADED if any circuit breaker is open or half-open",
-            "gridPos": {
-                "x": 12,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
-                },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "1": {
-                                    "text": "DEGRADED",
-                                    "color": "orange",
-                                    "index": 1
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 2
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 3
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "DOWN",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "clamp_min(up{job=\"inandout-writeback\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-writeback\"} > 0) or vector(0), 1), 0)",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
-                }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            }
-        },
-        {
-            "id": 5,
-            "type": "stat",
-            "title": "Schema Manager",
-            "description": "DOWN if scrape fails; DEGRADED if a reconcile error occurred in the last 5 min",
-            "gridPos": {
-                "x": 16,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
-                },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "1": {
-                                    "text": "DEGRADED",
-                                    "color": "orange",
-                                    "index": 1
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 2
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 3
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "DOWN",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "clamp_min(up{job=\"schema-manager\"} * 2 - on() group_left() clamp_max(ceil(increase(schema_reconcile_total{result=\"error\"}[5m])) or vector(0), 1), 0)",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
-                }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            }
-        },
-        {
-            "id": 6,
-            "type": "stat",
-            "title": "Simulator",
-            "description": "DOWN if Prometheus cannot scrape the simulator",
-            "gridPos": {
-                "x": 20,
-                "y": 0,
-                "w": 4,
-                "h": 6
-            },
-            "options": {
-                "reduceOptions": {
-                    "values": false,
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": ""
-                },
-                "orientation": "auto",
-                "textMode": "value",
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center"
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 0
-                                },
-                                "2": {
-                                    "text": "OK",
-                                    "color": "dark-green",
-                                    "index": 1
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "text": "DOWN",
-                                    "color": "dark-red",
-                                    "index": 2
-                                }
-                            }
-                        }
-                    ],
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "noValue": "DOWN",
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "up{job=\"inandout-simulator\"} * 2",
-                    "refId": "A",
-                    "instant": true,
-                    "legendFormat": ""
-                }
-            ],
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            }
-        },
-        {
-            "id": 7,
-            "type": "stat",
-            "title": "Dashboard",
-            "description": "DOWN if Prometheus cannot scrape the sesam-dashboard service",
-            "datasource": {
-                "type": "prometheus",
-                "uid": "Prometheus"
-            },
-            "gridPos": {
-                "h": 6,
-                "w": 4,
-                "x": 0,
-                "y": 6
-            },
-            "fieldConfig": {
-                "defaults": {
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "mappings": [
-                        {
-                            "type": "value",
-                            "options": {
-                                "0": {
-                                    "color": "dark-red",
-                                    "index": 0,
-                                    "text": "DOWN"
-                                },
-                                "2": {
-                                    "color": "dark-green",
-                                    "index": 1,
-                                    "text": "OK"
-                                }
-                            }
-                        },
-                        {
-                            "type": "special",
-                            "options": {
-                                "match": "null+nan",
-                                "result": {
-                                    "color": "dark-red",
-                                    "index": 2,
-                                    "text": "DOWN"
-                                }
-                            }
-                        }
-                    ],
-                    "noValue": "DOWN",
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "dark-red",
-                                "value": null
-                            },
-                            {
-                                "color": "orange",
-                                "value": 1
-                            },
-                            {
-                                "color": "dark-green",
-                                "value": 2
-                            }
-                        ]
-                    },
-                    "unit": "short"
-                },
-                "overrides": []
-            },
-            "options": {
-                "colorMode": "background",
-                "graphMode": "none",
-                "justifyMode": "center",
-                "orientation": "auto",
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ],
-                    "fields": "",
-                    "values": false
-                },
-                "textMode": "value"
-            },
-            "targets": [
-                {
-                    "datasource": {
-                        "type": "prometheus",
-                        "uid": "Prometheus"
-                    },
-                    "expr": "up{job=\"sesam-dashboard\"} * 2",
-                    "instant": true,
-                    "legendFormat": "",
-                    "refId": "A"
-                }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
             ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NO DATA",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "pg_up * 2",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
         }
-    ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "pg-trickle",
+      "description": "pgtrickle.quick_health: OK / WARNING (stale/error tables) / CRITICAL",
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "CRITICAL",
+                  "color": "dark-red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "WARNING",
+                  "color": "orange",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "NO DATA",
+                  "color": "dark-red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NO DATA",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "2 - pg_trickle_health_health_status_code",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Ingest",
+      "description": "DOWN if scrape fails; DEGRADED if any circuit breaker is open or half-open",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "DEGRADED",
+                  "color": "orange",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "DOWN",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "clamp_min(up{job=\"inandout-ingest\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-ingest\"} > 0) or vector(0), 1) - on() group_left() clamp_max(count(inout_sync_sla_violated > 0) or vector(0), 1), 0)",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Writeback",
+      "description": "DOWN if scrape fails; DEGRADED if any circuit breaker is open or half-open",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "DEGRADED",
+                  "color": "orange",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "DOWN",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "clamp_min(up{job=\"inandout-writeback\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-writeback\"} > 0) or vector(0), 1), 0)",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Schema Manager",
+      "description": "DOWN if scrape fails; DEGRADED if a reconcile error occurred in the last 5 min",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "DEGRADED",
+                  "color": "orange",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "DOWN",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "clamp_min(up{job=\"schema-manager\"} * 2 - on() group_left() clamp_max(ceil(increase(schema_reconcile_total{result=\"error\"}[5m])) or vector(0), 1), 0)",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Simulator",
+      "description": "DOWN if Prometheus cannot scrape the simulator",
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 0
+                },
+                "2": {
+                  "text": "OK",
+                  "color": "dark-green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "DOWN",
+                  "color": "dark-red",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "DOWN",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "up{job=\"inandout-simulator\"} * 2",
+          "refId": "A",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Dashboard",
+      "description": "DOWN if Prometheus cannot scrape the sesam-dashboard service",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "dark-red",
+                  "index": 0,
+                  "text": "DOWN"
+                },
+                "2": {
+                  "color": "dark-green",
+                  "index": 1,
+                  "text": "OK"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "color": "dark-red",
+                  "index": 2,
+                  "text": "DOWN"
+                }
+              }
+            }
+          ],
+          "noValue": "DOWN",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "up{job=\"sesam-dashboard\"} * 2",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
 }
