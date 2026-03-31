@@ -227,3 +227,74 @@ async def fetch_pipeline_flow_counts(pool: asyncpg.Pool, mapping) -> list[dict]:
                     )
                 )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Model overview
+# ---------------------------------------------------------------------------
+
+
+async def fetch_model_overview(pool: asyncpg.Pool, mapping) -> list[dict]:
+    """
+    For each target, return entity counts and cluster-size distribution
+    from _id_{target} and _resolved_{target}.
+    """
+    results = []
+
+    async with pool.acquire() as conn:
+
+        async def safe_fetchval(query: str):
+            try:
+                return await conn.fetchval(query)
+            except Exception:
+                return None
+
+        async def safe_fetch(query: str):
+            try:
+                return [dict(r) for r in await conn.fetch(query)]
+            except Exception:
+                return []
+
+        for target_name in mapping.targets:
+            id_view = f"_id_{target_name}"
+            resolved_view = f"_resolved_{target_name}"
+
+            resolved_count = await safe_fetchval(
+                f'SELECT COUNT(*) FROM "{resolved_view}"'
+            )
+            cluster_count = await safe_fetchval(
+                f'SELECT COUNT(DISTINCT _entity_id_resolved) FROM "{id_view}"'
+            )
+            merged_count = await safe_fetchval(
+                f"""
+                SELECT COUNT(*) FROM (
+                    SELECT _entity_id_resolved
+                    FROM "{id_view}"
+                    GROUP BY _entity_id_resolved
+                    HAVING COUNT(DISTINCT _mapping) > 1
+                ) t
+                """
+            )
+            cluster_distribution = await safe_fetch(
+                f"""
+                SELECT cluster_size, COUNT(*) AS clusters
+                FROM (
+                    SELECT _entity_id_resolved, COUNT(DISTINCT _mapping) AS cluster_size
+                    FROM "{id_view}"
+                    GROUP BY _entity_id_resolved
+                ) t
+                GROUP BY cluster_size
+                ORDER BY cluster_size
+                """
+            )
+
+            results.append(
+                dict(
+                    target=target_name,
+                    resolved_count=resolved_count,
+                    cluster_count=cluster_count,
+                    merged_count=merged_count,
+                    cluster_distribution=cluster_distribution,
+                )
+            )
+    return results

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Trace — Sesam Dashboard{% endblock %}
+{% block nav_trace %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-100 mb-2">Entity Tracer</h1>
+<p class="text-sm text-slate-400 mb-6">Follow a single entity end-to-end through the pipeline — from source record to
+    golden record.</p>
+
+<form method="get" action="/ui/trace" class="flex gap-3 mb-8">
+    <input type="text" name="q" value="{{ query }}" placeholder="record_id or entity_id…"
+        class="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500" />
+    <button type="submit"
+        class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-sm font-semibold transition-colors">
+        Trace
+    </button>
+</form>
+
+{% if query %}
+<div class="bg-amber-900/20 border border-amber-700 rounded-xl px-5 py-4 text-sm text-amber-300">
+    Entity tracing is not yet implemented. Query: <code class="font-mono">{{ query }}</code>
+</div>
+{% else %}
+<div class="bg-slate-900 rounded-xl border border-slate-700 px-5 py-8 text-center text-slate-500 text-sm">
+    Enter a <code>record_id</code> or <code>_entity_id_resolved</code> above to trace an entity through the pipeline.
+</div>
+{% endif %}
+{% endblock %}

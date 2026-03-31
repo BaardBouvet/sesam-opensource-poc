@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Control — Sesam Dashboard{% endblock %}
+{% block nav_control %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-100 mb-6">Control Panel</h1>
+
+{# ── Schema-manager reconcile ────────────────────────────────────────────── #}
+<section class="mb-8">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Schema Manager</h2>
+    <div class="bg-slate-900 rounded-xl border border-slate-700 px-5 py-4 flex items-start gap-6">
+        <div class="flex-1">
+            <p class="text-sm text-slate-300 mb-1">Trigger a schema reconcile to recreate OSI mapping views and update
+                the component gate.</p>
+            <p class="text-xs text-slate-500">POST → <code>{{ schema_manager_url }}/reconcile</code></p>
+        </div>
+        <button hx-post="/api/reconcile" hx-target="#reconcile-result" hx-swap="innerHTML"
+            hx-indicator="#reconcile-spinner"
+            class="shrink-0 px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-sm font-semibold transition-colors">
+            Reconcile
+        </button>
+        <span id="reconcile-spinner" class="htmx-indicator text-slate-400 text-sm self-center">…</span>
+    </div>
+    <div id="reconcile-result" class="mt-2 text-xs font-mono text-slate-400"></div>
+</section>
+
+{# ── Component gate ──────────────────────────────────────────────────────── #}
+<section class="mb-8">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Component Gate</h2>
+    {% if not component_gate %}
+    <p class="text-sm text-slate-500 italic">component_state table not found.</p>
+    {% else %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">component</th>
+                    <th class="text-left px-4 py-2">desired</th>
+                    <th class="text-left px-4 py-2">schema_version</th>
+                    <th class="text-left px-4 py-2">updated_at</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for row in component_gate %}
+                <tr class="hover:bg-slate-800/50">
+                    <td class="px-4 py-2 font-mono text-slate-200">{{ row.component }}</td>
+                    <td class="px-4 py-2">
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold
+                            {% if row.desired == 'running' %}bg-green-900 text-green-300
+                            {% else %}bg-amber-900 text-amber-300{% endif %}">
+                            {{ row.desired }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2 text-slate-400 font-mono">{{ row.schema_version or '—' }}</td>
+                    <td class="px-4 py-2 text-slate-400">{{ row.updated_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Migration history ───────────────────────────────────────────────────── #}
+<section>
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Migration History</h2>
+    {% if not migrations %}
+    <p class="text-sm text-slate-500 italic">No migration records found.</p>
+    {% else %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    {% for col in migrations[0].keys() %}
+                    <th class="text-left px-4 py-2">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for row in migrations %}
+                <tr class="hover:bg-slate-800/50">
+                    {% for val in row.values() %}
+                    <td class="px-4 py-2 font-mono text-slate-300">{{ val if val is not none else '—' }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

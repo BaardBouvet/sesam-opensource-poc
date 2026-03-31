@@ -17,8 +17,8 @@
 
 # Global ARGs for FROM references — must appear before the first FROM so that
 # Docker treats them as build-time variables available to all FROM statements.
-ARG OSI_MAPPING_ENGINE
-ARG INANDOUT_ENGINE
+ARG OSI_MAPPING_ENGINE=scratch
+ARG INANDOUT_ENGINE=scratch
 
 # ── Stage 1: OSI-mapping engine (Rust binary + convert script) ────────────────
 FROM ${OSI_MAPPING_ENGINE} AS osi

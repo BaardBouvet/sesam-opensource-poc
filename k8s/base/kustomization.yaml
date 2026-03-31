@@ -8,6 +8,7 @@ resources:
   - secret.yaml
   - configmap.yaml
   - postgres.yaml
+  - postgres-exporter.yaml
   - schema-manager.yaml
   - ingest.yaml
   - writeback.yaml
@@ -48,6 +49,14 @@ configMapGenerator:
     files:
       - prometheus.yml=prometheus.yml
       - alerts.yml=../../vendor/in-and-out/observability/prometheus/alerts.yml
+      - pg_trickle_alerts.yml=../../vendor/pg-trickle/monitoring/prometheus/alerts.yml
+
+  - name: pg-trickle-exporter-queries
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - pg_trickle_queries.yml=../../vendor/pg-trickle/monitoring/prometheus/pg_trickle_queries.yml
 
   - name: alertmanager-config
     namespace: sesam-poc
@@ -62,6 +71,10 @@ configMapGenerator:
       disableNameSuffixHash: true
     files:
       - inandout.json=../../vendor/in-and-out/observability/grafana/dashboards/inandout.json
+      - pg_trickle_overview.json=pg_trickle_overview.json
+      - overview.json=overview.json
+      - postgres_overview.json=postgres_overview.json
+      - prometheus_overview.json=prometheus_overview.json
 
   - name: grafana-provisioning-datasources
     namespace: sesam-poc

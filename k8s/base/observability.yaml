@@ -51,6 +51,9 @@ spec:
             - name: prometheus-config
               mountPath: /etc/prometheus/alerts.yml
               subPath: alerts.yml
+            - name: prometheus-config
+              mountPath: /etc/prometheus/pg_trickle_alerts.yml
+              subPath: pg_trickle_alerts.yml
       volumes:
         - name: prometheus-config
           configMap:

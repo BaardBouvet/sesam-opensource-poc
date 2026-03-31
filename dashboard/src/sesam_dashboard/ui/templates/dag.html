@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}DAG — Sesam Dashboard{% endblock %}
+{% block nav_dag %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-100 mb-2">Mapping DAG</h1>
+<p class="text-sm text-slate-400 mb-6">Visual overview of the mapping structure from sources through to targets.</p>
+
+{% for target_name, target in mapping.targets.items() %}
+<section class="mb-8">
+    <h2 class="text-base font-semibold text-slate-300 mb-3 font-mono">→ {{ target_name }}</h2>
+    <div class="space-y-2">
+        {% for m in target.mappings %}
+        <div
+            class="bg-slate-900 rounded-xl border border-slate-700 px-5 py-3 flex flex-wrap items-center gap-2 text-xs font-mono">
+            {% if m.source_table %}
+            <span class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300">{{ m.source_table
+                }}</span>
+            <span class="text-slate-500">→</span>
+            {% endif %}
+            <span class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300">_fwd_{{ m.name }}</span>
+            <span class="text-slate-500">→</span>
+            <span class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300">_id_{{ target_name
+                }}</span>
+            <span class="text-slate-500">→</span>
+            <span class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300">_resolved_{{ target_name
+                }}</span>
+            {% if m.written_state %}
+            <span class="text-slate-500">→</span>
+            <span class="bg-sky-900/40 border border-sky-700 rounded px-2 py-1 text-sky-300">{{ m.written_state.table
+                }}</span>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% else %}
+<p class="text-sm text-slate-500 italic">No targets found — check mapping.yaml.</p>
+{% endfor %}
+{% endblock %}

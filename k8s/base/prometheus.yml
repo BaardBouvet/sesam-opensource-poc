@@ -4,8 +4,15 @@ global:
 
 rule_files:
   - /etc/prometheus/alerts.yml
+  - /etc/prometheus/pg_trickle_alerts.yml
 
 scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+    metrics_path: /metrics
+
   - job_name: inandout-ingest
     static_configs:
       - targets:
@@ -16,4 +23,28 @@ scrape_configs:
     static_configs:
       - targets:
           - inandout-writeback:9091
+    metrics_path: /metrics
+
+  - job_name: inandout-simulator
+    static_configs:
+      - targets:
+          - inandout-simulator:6100
+    metrics_path: /metrics
+
+  - job_name: schema-manager
+    static_configs:
+      - targets:
+          - schema-manager:9080
+    metrics_path: /metrics
+
+  - job_name: sesam-dashboard
+    static_configs:
+      - targets:
+          - sesam-dashboard:8888
+    metrics_path: /metrics/
+
+  - job_name: postgres
+    static_configs:
+      - targets:
+          - postgres-exporter:9187
     metrics_path: /metrics

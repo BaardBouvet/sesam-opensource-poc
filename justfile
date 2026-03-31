@@ -72,6 +72,7 @@ forward:
     kubectl -n {{NAMESPACE}} port-forward svc/inandout-writeback 9091:9091 &
     kubectl -n {{NAMESPACE}} port-forward svc/schema-manager     9080:9080 &
     kubectl -n {{NAMESPACE}} port-forward statefulset/postgres   5432:5432 &
+    kubectl -n {{NAMESPACE}} port-forward svc/grafana            3000:3000 &
     wait
 
 # Tear down all deployed resources

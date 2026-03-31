@@ -1,0 +1,617 @@
+{
+    "title": "Prometheus",
+    "uid": "sesam-prometheus",
+    "schemaVersion": 36,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "panels": [
+        {
+            "id": 1,
+            "type": "stat",
+            "title": "Targets Up",
+            "description": "Number of scrape targets currently reachable",
+            "gridPos": {
+                "x": 0,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "dark-green",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "count(up == 1)",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 2,
+            "type": "stat",
+            "title": "Targets Down",
+            "description": "Number of scrape targets currently unreachable",
+            "gridPos": {
+                "x": 4,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "dark-green",
+                                "value": null
+                            },
+                            {
+                                "color": "dark-red",
+                                "value": 1
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "noValue": "0"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "count(up == 0) or vector(0)",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 3,
+            "type": "stat",
+            "title": "Time Series (TSDB)",
+            "description": "Total active time series in the head block",
+            "gridPos": {
+                "x": 8,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "text",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "prometheus_tsdb_head_series",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 4,
+            "type": "stat",
+            "title": "Samples Ingested/s",
+            "description": "Rate of samples appended to the TSDB head",
+            "gridPos": {
+                "x": 12,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "value",
+                "graphMode": "area",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "text",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "rate(prometheus_tsdb_head_samples_appended_total[1m])",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 5,
+            "type": "stat",
+            "title": "Storage Size",
+            "description": "Total bytes used by the TSDB blocks on disk",
+            "gridPos": {
+                "x": 16,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "value",
+                "graphMode": "none",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "bytes",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "text",
+                                "value": null
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "expr": "prometheus_tsdb_storage_blocks_bytes",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 6,
+            "type": "stat",
+            "title": "Rule Eval Failures",
+            "description": "Total alert/recording rule evaluation failures",
+            "gridPos": {
+                "x": 20,
+                "y": 0,
+                "w": 4,
+                "h": 4
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "dark-green",
+                                "value": null
+                            },
+                            {
+                                "color": "dark-red",
+                                "value": 1
+                            }
+                        ]
+                    },
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "noValue": "0"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "sum(prometheus_rule_evaluation_failures_total) or vector(0)",
+                    "refId": "A",
+                    "instant": true
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 7,
+            "type": "table",
+            "title": "Scrape Target Health",
+            "description": "up=1 reachable, up=0 unreachable. Shows last scrape duration and sample count per target.",
+            "gridPos": {
+                "x": 0,
+                "y": 4,
+                "w": 24,
+                "h": 8
+            },
+            "options": {
+                "sortBy": [
+                    {
+                        "displayName": "up",
+                        "desc": false
+                    }
+                ]
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Value #up"
+                        },
+                        "properties": [
+                            {
+                                "id": "displayName",
+                                "value": "up"
+                            },
+                            {
+                                "id": "custom.displayMode",
+                                "value": "color-background"
+                            },
+                            {
+                                "id": "mappings",
+                                "value": [
+                                    {
+                                        "type": "value",
+                                        "options": {
+                                            "0": {
+                                                "text": "DOWN",
+                                                "color": "dark-red"
+                                            },
+                                            "1": {
+                                                "text": "UP",
+                                                "color": "dark-green"
+                                            }
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "id": "thresholds",
+                                "value": {
+                                    "mode": "absolute",
+                                    "steps": [
+                                        {
+                                            "color": "dark-red",
+                                            "value": null
+                                        },
+                                        {
+                                            "color": "dark-green",
+                                            "value": 1
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Value #duration"
+                        },
+                        "properties": [
+                            {
+                                "id": "displayName",
+                                "value": "scrape duration (ms)"
+                            },
+                            {
+                                "id": "unit",
+                                "value": "ms"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Value #samples"
+                        },
+                        "properties": [
+                            {
+                                "id": "displayName",
+                                "value": "samples scraped"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "transformations": [
+                {
+                    "id": "merge",
+                    "options": {}
+                },
+                {
+                    "id": "organize",
+                    "options": {
+                        "excludeByName": {
+                            "Time": true,
+                            "__name__": true
+                        },
+                        "renameByName": {}
+                    }
+                }
+            ],
+            "targets": [
+                {
+                    "expr": "up",
+                    "refId": "up",
+                    "instant": true,
+                    "legendFormat": "{{job}} — {{instance}}"
+                },
+                {
+                    "expr": "scrape_duration_seconds * 1000",
+                    "refId": "duration",
+                    "instant": true,
+                    "legendFormat": "{{job}} — {{instance}}"
+                },
+                {
+                    "expr": "scrape_samples_scraped",
+                    "refId": "samples",
+                    "instant": true,
+                    "legendFormat": "{{job}} — {{instance}}"
+                }
+            ],
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 8,
+            "type": "timeseries",
+            "title": "Scrape Duration by Job",
+            "gridPos": {
+                "x": 0,
+                "y": 12,
+                "w": 12,
+                "h": 8
+            },
+            "targets": [
+                {
+                    "expr": "scrape_duration_seconds * 1000",
+                    "legendFormat": "{{job}}",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {
+                        "lineWidth": 2
+                    },
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "dark-green",
+                                "value": null
+                            },
+                            {
+                                "color": "orange",
+                                "value": 1000
+                            },
+                            {
+                                "color": "dark-red",
+                                "value": 5000
+                            }
+                        ]
+                    }
+                }
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 9,
+            "type": "timeseries",
+            "title": "Samples Ingested/s",
+            "gridPos": {
+                "x": 12,
+                "y": 12,
+                "w": 12,
+                "h": 8
+            },
+            "targets": [
+                {
+                    "expr": "rate(prometheus_tsdb_head_samples_appended_total[1m])",
+                    "legendFormat": "samples/s",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "cps",
+                    "custom": {
+                        "lineWidth": 2
+                    }
+                }
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 10,
+            "type": "timeseries",
+            "title": "TSDB Head Series",
+            "gridPos": {
+                "x": 0,
+                "y": 20,
+                "w": 12,
+                "h": 8
+            },
+            "targets": [
+                {
+                    "expr": "prometheus_tsdb_head_series",
+                    "legendFormat": "active series",
+                    "refId": "A"
+                },
+                {
+                    "expr": "prometheus_tsdb_head_chunks",
+                    "legendFormat": "head chunks",
+                    "refId": "B"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "custom": {
+                        "lineWidth": 2
+                    }
+                }
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        },
+        {
+            "id": 11,
+            "type": "timeseries",
+            "title": "Query Duration (p99 / p50)",
+            "gridPos": {
+                "x": 12,
+                "y": 20,
+                "w": 12,
+                "h": 8
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.99, rate(prometheus_engine_query_duration_seconds_bucket[5m]))",
+                    "legendFormat": "p99",
+                    "refId": "A"
+                },
+                {
+                    "expr": "histogram_quantile(0.50, rate(prometheus_engine_query_duration_seconds_bucket[5m]))",
+                    "legendFormat": "p50",
+                    "refId": "B"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s",
+                    "custom": {
+                        "lineWidth": 2
+                    }
+                }
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            }
+        }
+    ]
+}

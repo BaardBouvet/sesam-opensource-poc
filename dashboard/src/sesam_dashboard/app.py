@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import asyncpg
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from pathlib import Path
+from prometheus_client import make_asgi_app as prometheus_make_asgi_app
 
 from sesam_dashboard.mapping_reader import load_mapping
+from sesam_dashboard.metrics import (
+    REGISTRY,
+    dashboard_requests_total,
+    dashboard_request_duration_seconds,
+)
 from sesam_dashboard.ui.router import build_ui_router
 from sesam_dashboard.ui.api import build_api_router
 
@@ -50,6 +57,24 @@ def create_app(
 
     app.include_router(build_api_router())
     app.include_router(build_ui_router())
+
+    @app.middleware("http")
+    async def _record_metrics(request: Request, call_next):
+        # Collapse path parameters into a stable label to avoid high cardinality.
+        path = request.url.path
+        method = request.method
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration = time.perf_counter() - start
+        dashboard_requests_total.labels(
+            method=method, path=path, status_code=str(response.status_code)
+        ).inc()
+        dashboard_request_duration_seconds.labels(method=method, path=path).observe(
+            duration
+        )
+        return response
+
+    app.mount("/metrics", prometheus_make_asgi_app(registry=REGISTRY))
 
     @app.get("/health")
     async def health():

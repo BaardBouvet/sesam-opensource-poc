@@ -55,6 +55,7 @@ build:
         manual:
           - src: "vendor/schema-manager/schema_manager/**/*.py"
             dest: /usr/local/lib/python3.13/site-packages
+            strip: "vendor/schema-manager/"
           - src: "mapping.yaml"
             dest: /config
           - src: "connectors/*.yaml"
@@ -69,8 +70,10 @@ build:
         manual:
           - src: "dashboard/src/**/*.py"
             dest: /usr/local/lib/python3.13/site-packages
+            strip: "dashboard/src/"
           - src: "dashboard/src/**/templates/**"
             dest: /usr/local/lib/python3.13/site-packages
+            strip: "dashboard/src/"
 
 manifests:
   kustomize:

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Pipelines — Sesam Dashboard{% endblock %}
+{% block nav_pipelines %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-100 mb-6">Pipeline Flow Counts</h1>
+
+{% if not flow %}
+<p class="text-sm text-slate-500 italic">No pipeline mappings found — check mapping.yaml.</p>
+{% else %}
+
+<div class="bg-slate-900 rounded-xl border border-slate-700 overflow-x-auto">
+    <table class="w-full text-xs">
+        <thead class="bg-slate-800 text-slate-400">
+            <tr>
+                <th class="text-left px-4 py-2">mapping</th>
+                <th class="text-left px-4 py-2">target</th>
+                <th class="text-right px-4 py-2">ingested</th>
+                <th class="text-right px-4 py-2">forwarded</th>
+                <th class="text-right px-4 py-2">clusters</th>
+                <th class="text-right px-4 py-2">resolved</th>
+                <th class="text-right px-4 py-2">pending write</th>
+                <th class="text-right px-4 py-2">written</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+            {% for row in flow %}
+            <tr class="hover:bg-slate-800/50">
+                <td class="px-4 py-2 font-mono text-slate-200">{{ row.mapping_name }}</td>
+                <td class="px-4 py-2 font-mono text-slate-400">{{ row.target }}</td>
+                <td class="px-4 py-2 text-right text-slate-300">{{ row.src_count if row.src_count is not none else '—'
+                    }}</td>
+                <td class="px-4 py-2 text-right text-slate-300">
+                    {% set fwd = row.fwd_count %}
+                    {% set src = row.src_count %}
+                    {% if fwd is not none and src is not none and src > 0 and fwd < src %} <span class="text-amber-400">
+                        {{ fwd }}</span>
+                        {% else %}
+                        {{ fwd if fwd is not none else '—' }}
+                        {% endif %}
+                </td>
+                <td class="px-4 py-2 text-right text-slate-300">{{ row.cluster_count if row.cluster_count is not none
+                    else '—' }}</td>
+                <td class="px-4 py-2 text-right text-slate-300">{{ row.resolved_count if row.resolved_count is not none
+                    else '—' }}</td>
+                <td
+                    class="px-4 py-2 text-right {% if row.pending_count and row.pending_count > 0 %}text-amber-400 font-semibold{% else %}text-slate-300{% endif %}">
+                    {{ row.pending_count if row.pending_count is not none else '—' }}
+                </td>
+                <td class="px-4 py-2 text-right text-slate-300">{{ row.written_count if row.written_count is not none
+                    else '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<p class="mt-3 text-xs text-slate-500">Amber values indicate a drop from the previous stage. Refresh for live counts.
+</p>
+{% endif %}
+{% endblock %}

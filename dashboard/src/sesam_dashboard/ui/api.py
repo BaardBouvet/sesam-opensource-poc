@@ -63,4 +63,19 @@ def build_api_router() -> APIRouter:
         flow = await fetch_pipeline_flow_counts(pool, mapping)
         return JSONResponse(_jsonable({"flow": flow}))
 
+    @router.post("/reconcile")
+    async def api_reconcile(request: Request):
+        import httpx
+
+        schema_manager_url = request.app.state.schema_manager_url.rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(f"{schema_manager_url}/reconcile")
+            return JSONResponse(
+                {"status": "ok", "code": resp.status_code, "body": resp.text},
+                status_code=resp.status_code,
+            )
+        except Exception as exc:
+            return JSONResponse({"status": "error", "detail": str(exc)}, status_code=502)
+
     return router

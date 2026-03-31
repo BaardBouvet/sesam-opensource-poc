@@ -15,6 +15,7 @@ from sesam_dashboard.db import (
     fetch_source_table_state,
     fetch_migration_history,
     fetch_pipeline_flow_counts,
+    fetch_model_overview,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -54,6 +55,62 @@ def build_ui_router() -> APIRouter:
                 "streams": streams,
                 "sources": sources,
                 "flow": flow,
+            },
+        )
+
+    @router.get("/ui/pipelines", response_class=HTMLResponse)
+    async def pipelines(request: Request):
+        pool = request.app.state.pool
+        mapping = request.app.state.mapping
+        flow = await fetch_pipeline_flow_counts(pool, mapping)
+        return templates.TemplateResponse(
+            request,
+            "pipelines.html",
+            {"flow": flow},
+        )
+
+    @router.get("/ui/model", response_class=HTMLResponse)
+    async def model(request: Request):
+        pool = request.app.state.pool
+        mapping = request.app.state.mapping
+        targets = await fetch_model_overview(pool, mapping)
+        return templates.TemplateResponse(
+            request,
+            "model.html",
+            {"targets": targets},
+        )
+
+    @router.get("/ui/trace", response_class=HTMLResponse)
+    async def trace(request: Request):
+        query = request.query_params.get("q", "")
+        return templates.TemplateResponse(
+            request,
+            "trace.html",
+            {"query": query},
+        )
+
+    @router.get("/ui/dag", response_class=HTMLResponse)
+    async def dag(request: Request):
+        mapping = request.app.state.mapping
+        return templates.TemplateResponse(
+            request,
+            "dag.html",
+            {"mapping": mapping},
+        )
+
+    @router.get("/ui/control", response_class=HTMLResponse)
+    async def control(request: Request):
+        pool = request.app.state.pool
+        gate = await fetch_component_gate(pool)
+        migrations = await fetch_migration_history(pool)
+        schema_manager_url = request.app.state.schema_manager_url
+        return templates.TemplateResponse(
+            request,
+            "control.html",
+            {
+                "component_gate": gate,
+                "migrations": migrations,
+                "schema_manager_url": schema_manager_url,
             },
         )
 
