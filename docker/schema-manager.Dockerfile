@@ -15,12 +15,15 @@
 #   - psql: for ad-hoc SQL if needed
 # =============================================================================
 
-# ── Stage 1: OSI-mapping engine (Rust binary + convert script) ────────────────
+# Global ARGs for FROM references — must appear before the first FROM so that
+# Docker treats them as build-time variables available to all FROM statements.
 ARG OSI_MAPPING_ENGINE
+ARG INANDOUT_ENGINE
+
+# ── Stage 1: OSI-mapping engine (Rust binary + convert script) ────────────────
 FROM ${OSI_MAPPING_ENGINE} AS osi
 
 # ── Stage 2: In-and-out engine (inandout CLI + Alembic migrations) ────────────
-ARG INANDOUT_ENGINE
 FROM ${INANDOUT_ENGINE} AS inandout
 
 # ── Stage 3: Schema-manager Python build ──────────────────────────────────────
@@ -42,10 +45,13 @@ COPY --from=osi /usr/local/bin/osi-engine /usr/local/bin/
 COPY --from=osi /usr/local/bin/convert_matviews_to_pgtrickle.py /usr/local/bin/
 
 # inandout CLI + Alembic migrations
-COPY --from=inandout /app/.venv /opt/inandout-venv
+# Copy venv to /app/.venv — the entry-point scripts inside the venv have their
+# shebang hardcoded to #!/app/.venv/bin/python (set at pip-install time), so the
+# destination path must match exactly or the scripts will fail with ENOENT.
+COPY --from=inandout /app/.venv /app/.venv
 COPY vendor/in-and-out/engine/migrations/ /opt/inandout/migrations/
 COPY vendor/in-and-out/engine/alembic.ini /opt/inandout/alembic.ini
-ENV INANDOUT_VENV="/opt/inandout-venv"
+ENV INANDOUT_VENV="/app/.venv"
 
 # psql client
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
