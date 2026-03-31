@@ -13,6 +13,7 @@ resources:
   - writeback.yaml
   - simulator.yaml
   - dashboard.yaml
+  - observability.yaml
 
 # Generate ConfigMaps directly from source files.
 # Requires --load-restrictor=LoadRestrictionsNone (set in skaffold.yaml buildArgs)
@@ -39,6 +40,42 @@ configMapGenerator:
       disableNameSuffixHash: true
     files:
       - schema-manager.yaml=../../vendor/schema-manager/schema-manager.yaml
+
+  - name: prometheus-config
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - prometheus.yml=prometheus.yml
+      - alerts.yml=../../vendor/in-and-out/observability/prometheus/alerts.yml
+
+  - name: alertmanager-config
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - alertmanager.yml=../../vendor/in-and-out/observability/alertmanager.yml
+
+  - name: grafana-dashboards
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - inandout.json=../../vendor/in-and-out/observability/grafana/dashboards/inandout.json
+
+  - name: grafana-provisioning-datasources
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - prometheus.yml=../../vendor/in-and-out/observability/grafana/provisioning/datasources/prometheus.yml
+
+  - name: grafana-provisioning-dashboards
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - dashboard.yml=../../vendor/in-and-out/observability/grafana/provisioning/dashboards/dashboard.yml
 
 labels:
   - pairs:
