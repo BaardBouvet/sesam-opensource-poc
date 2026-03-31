@@ -35,13 +35,13 @@ spec:
             - secretRef:
                 name: sesam-credentials
         - name: wait-for-schema-manager
-          image: curlimages/curl:latest
+          image: inandout-engine:latest
           imagePullPolicy: IfNotPresent
           command:
             - sh
             - -c
             - |
-              until curl -sf http://schema-manager:9080/ready >/dev/null 2>&1; do
+              until wget -qO- http://schema-manager:9080/ready >/dev/null 2>&1; do
                 sleep 3
               done
       containers:
