@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<script>
+    (function () {
+        var s = localStorage.getItem('theme'), d = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (s === 'dark' || (s === null && d)) document.documentElement.classList.add('dark');
+    })();
+</script>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{% block title %}Sesam Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }</script>
+    <script src="https://unpkg.com/htmx.org@1.9.10" defer></script>
+</head>
+
+<body class="h-full bg-slate-950 text-slate-200 font-sans">
+
+    <nav class="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center gap-6 sticky top-0 z-10">
+        <span class="text-sky-400 font-bold text-lg tracking-tight">sesam</span>
+        <a href="/ui" class="text-sm {% block nav_schema %}text-slate-400 hover:text-slate-200{% endblock %}">Schema &
+            Pipeline</a>
+        <a href="/ui/pipelines"
+            class="text-sm {% block nav_pipelines %}text-slate-400 hover:text-slate-200{% endblock %}">Pipelines</a>
+        <a href="/ui/model"
+            class="text-sm {% block nav_model %}text-slate-400 hover:text-slate-200{% endblock %}">Model</a>
+        <a href="/ui/trace"
+            class="text-sm {% block nav_trace %}text-slate-400 hover:text-slate-200{% endblock %}">Trace</a>
+        <a href="/ui/dag" class="text-sm {% block nav_dag %}text-slate-400 hover:text-slate-200{% endblock %}">DAG</a>
+        <a href="/ui/control"
+            class="text-sm {% block nav_control %}text-slate-400 hover:text-slate-200{% endblock %}">Control</a>
+    </nav>
+
+    <main class="px-6 py-6 max-w-7xl mx-auto">
+        {% block content %}{% endblock %}
+    </main>
+
+</body>
+
+</html>

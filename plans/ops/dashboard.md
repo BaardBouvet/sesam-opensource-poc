@@ -30,29 +30,125 @@ same stack that exposes the internals of the *pipeline* rather than the simulato
 | Data sources | PostgreSQL (direct), ingest engine HTTP API, schema-manager HTTP API |
 | Location | `dashboard/` at project root (project-specific; not a reusable vendor package) |
 
+## Scope boundary
+
+Process health (is ingest running, CPU/memory, error rates over time, alerts) belongs in Grafana.
+This dashboard covers things that do not make sense in Grafana: structural state of the data model,
+data-level counts at each pipeline layer, entity-level merge inspection, and operational controls
+that act on data rather than infrastructure.
+
+## Page Priority
+
+| Priority | Page | Answers |
+|---|---|---|
+| 1 | `/ui` — Schema & Pipeline State | Did the views get created? Is data flowing through each layer? |
+| 2 | `/ui/sync-status/{target}` — Sync Matrix | Where is each entity across connected systems? |
+| 3 | `/ui/model` — Golden Record Explorer | What did the merge produce? |
+| 4 | `/ui/trace` — Entity Tracer | Follow one entity end-to-end |
+| 5 | `/ui/dag` — Mapping DAG | Visual overview of the mapping structure |
+| 6 | `/ui/control` — Actions Panel | Force-sync, reconcile, requeue |
+
 ## Pages
 
-### `/ui` — Pipeline Overview
+### `/ui` — Schema & Pipeline State (landing page)
 
-The landing page. One row per connector × datatype pair (e.g. hubspot/contacts, tripletex/customers).
+Combines two questions always asked together when something is wrong: "did the schema-manager create
+the right views?" and "is data actually flowing through them?" Neither belongs in Grafana — they are
+structural snapshots, not time-series metrics.
 
-Columns:
-- Connector + datatype
-- Last sync status (`ok` / `error` / `never`)
-- Last sync finished at (human-relative: "2 min ago")
-- Last sync duration
-- Source table row count (live `SELECT COUNT(*)` on `inout_src_{connector}_{datatype}`)
-- Deleted-flag count
-- Written records count (live `SELECT COUNT(*)` on `inout_dst_{connector}_{datatype}_lwstate`, if it exists)
-- Circuit-breaker state (from ingest engine `/connectors/{c}/datatypes/{d}/status`)
-- **Force-sync** button → `POST /api/pipelines/{connector}/{datatype}/force-sync`
+### `/ui/schema` — Schema & View State
 
-Data sourced from:
-- `inout_ops_sync_run` — latest row per (connector, datatype)
-- `inout_ops_watermark` — current watermark
-- Ingest engine `GET /connectors` for circuit-breaker state
+#### OSI mapping view checklist
 
-### `/ui/pipelines/{connector}/{datatype}` — Pipeline Detail
+For every view name expected from `mapping.yaml` (`_fwd_*`, `_id_*`, `_resolved_*`, `_delta_*`,
+and the consumer view), show:
+
+| View | Exists | Valid | Row count | Last DDL |
+|---|---|---|---|---|
+| `_fwd_hubspot_contacts` | ✓ | ✓ | 42 | 2 min ago |
+| `_id_person` | ✓ | ✓ | 42 | 2 min ago |
+| `_resolved_person` | ✓ | ✗ | ERROR | 2 min ago |
+| `person` | — | — | — | — |
+
+**Exists**: `SELECT 1 FROM information_schema.views WHERE table_name = ?`
+**Valid**: `EXPLAIN SELECT * FROM {view} LIMIT 0` — catches broken view SQL without a full scan
+**Row count**: `SELECT COUNT(*) FROM {view}` — only run if valid
+
+A broken view shows the full Postgres error message inline so the developer doesn't have to `psql`
+to diagnose it.
+
+#### Component gate state
+
+The `component_state` table is schema-manager state, not process health — it controls whether ingest
+and writeback are allowed to process rows at all. Show it here rather than in a health strip:
+
+```sql
+SELECT component, desired, schema_version, updated_at
+FROM component_state;
+```
+
+If `desired != 'running'`, display a prominent banner explaining that the schema-manager hasn't
+released the gate yet. This was the single most confusing failure mode: ingest appeared healthy
+but was silently doing nothing.
+
+#### pg-trickle stream state
+
+Not a metric — a structural question: "is this IVM view correctly tracking its source table?":
+
+```sql
+SELECT stream_name, status, lag_rows, last_event_at
+FROM pgtrickle.quick_health
+ORDER BY status DESC, stream_name;
+```
+
+`status = 'ok'` → green, `'lagging'` → amber, `'error'` → red, `'no_events'` → grey.
+A `no_events` stream for `_resolved_person` means the OSI mapping IVM has never received a change —
+typically because the `_id_person` view it depends on was recreated without a pgtrickle re-registration.
+
+#### Source table checklist
+
+For all `inout_src_*` tables: exists, row count, last `_ingested_at`, whether pg-trickle is
+tracking it (join to `pgtrickle.stream_tables_info`).
+
+#### Schema-manager reconcile log
+
+Last 10 reconcile events: timestamp, outcome (ok/error), what changed (DDL statements applied).
+If the schema-manager doesn't expose this yet, log it to a dashboard-owned `dashboard_reconcile_log`
+table on each manual trigger.
+
+#### Migration history
+
+```sql
+SELECT version, applied_at, description
+FROM schema_manager_migrations  -- or alembic_version
+ORDER BY applied_at DESC;
+```
+
+This would have immediately shown that the grant migrations were failing silently.
+
+### `/ui/pipelines` — Pipeline Overview
+
+One row per connector × datatype pair. The central question is not "did a sync run" (Grafana
+alerts on that) but **"how many records made it through each layer?"** — a structural snapshot that
+immediately shows where the pipeline is dropping records.
+
+**Data flow counts** — the query we have run most often as raw SQL. For each
+datatype, show counts at every layer so it's immediately obvious where records are dropping:
+
+| Stage | Table/View | Count |
+|---|---|---|
+| Ingested | `inout_src_{c}_{d}` | 42 |
+| Forwarded | `_fwd_{mapping}` | 42 |
+| In cluster | `_id_{target}` (distinct _entity_id_resolved) | 35 |
+| Resolved | `_resolved_{target}` | 35 |
+| Pending write | `inout_dst_{c}_{d}` where `_action != 'noop'` | 2 |
+| Written | `inout_dst_{c}_{d}_lwstate` | 33 |
+
+A drop between any two rows points directly to the broken layer.
+
+Also show per-datatype: last sync watermark (from `inout_ops_watermark`), circuit-breaker state
+(from ingest engine `/connectors` API), and a **Force-sync** button. These are control-plane items
+that don't belong in Grafana.
 
 Drills into one connector + datatype. Two sections:
 
@@ -413,7 +509,8 @@ These endpoints are consumed by the UI's own JavaScript:
 
 | Method | Path | Source |
 |---|---|---|
-| `GET` | `/api/pipelines` | `inout_ops_sync_run` + source table counts |
+| `GET` | `/api/schema` | View checklist + component gate + pgtrickle stream state + reconcile log |
+| `GET` | `/api/pipelines` | Per-datatype flow counts + last sync run |
 | `GET` | `/api/pipelines/{c}/{d}` | Detail: runs + DAG stages |
 | `POST` | `/api/pipelines/{c}/{d}/force-sync` | Proxy → ingest engine |
 | `POST` | `/api/pipelines/{c}/{d}/pause` | Proxy → ingest engine |
@@ -440,7 +537,10 @@ dashboard/
     cli.py                # Typer CLI: sesam-dashboard serve --config ...
     app.py                # create_app() — FastAPI factory, mounts /ui and /api
     config.py             # Pydantic settings (database DSN, ingest URL, schema-manager URL)
-    db.py                 # asyncpg pool; helpers: fetch_sync_runs, count_table, fetch_dag_views,
+    db.py                 # asyncpg pool; helpers: fetch_view_checklist, fetch_component_gate,
+                          #   fetch_pgtrickle_stream_state, fetch_source_table_state,
+                          #   fetch_pipeline_flow_counts,
+                          #   fetch_sync_runs, count_table, fetch_dag_views,
                           #   fetch_model_summary, fetch_entity_list, fetch_entity_detail,
                           #   fetch_sync_matrix, requeue_dead_letter, requeue_all_dead_letter,
                           #   trace_from_source, trace_from_entity, trace_from_destination,
@@ -450,12 +550,15 @@ dashboard/
     schema_client.py      # httpx AsyncClient wrapper for schema-manager API
     sse.py                # SSE stream (polls DB + engine; yields JSON events)
     ui/
-      router.py           # GET /ui, /ui/pipelines/..., /ui/model, /ui/model/{t}, /ui/model/{t}/{id},
+      router.py           # GET /ui (schema+pipeline landing), /ui/schema, /ui/pipelines,
+                          #   /ui/pipelines/{c}/{d}, /ui/model, /ui/model/{t}, /ui/model/{t}/{id},
                           #   /ui/sync-status/{t}, /ui/trace, /ui/dag, /ui/control
       api.py              # GET/POST /api/...
       templates/
-        base.html         # Shared nav, CSS links, SSE <script>
-        overview.html     # Pipeline overview table
+        base.html         # Shared nav + SSE <script>
+        schema.html       # Landing: view checklist, component gate, pgtrickle stream state,
+                          #   source table checklist, reconcile log, migration history
+        overview.html     # Pipeline data-flow counts table
         pipeline.html     # Sync-run timeline + DAG stages
         model.html        # Golden record explorer: target cards + cluster stats
         entity_list.html  # Paginated entity table with source badges

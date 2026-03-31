@@ -5,7 +5,7 @@ metadata:
 
 build:
   local:
-    push: false       # load directly into kind — no registry needed
+    push: false # load directly into kind — no registry needed
     useBuildkit: true
   artifacts:
     # ── in-and-out engine (ingest + writeback + migrate) ─────────────────────
@@ -60,6 +60,18 @@ build:
           - src: "connectors/*.yaml"
             dest: /config/connectors
 
+    # ── Sesam Dashboard (operational UI) ─────────────────────────────────────
+    - image: sesam-dashboard
+      context: .
+      docker:
+        dockerfile: docker/dashboard.Dockerfile
+      sync:
+        manual:
+          - src: "dashboard/src/**/*.py"
+            dest: /usr/local/lib/python3.13/site-packages
+          - src: "dashboard/src/**/templates/**"
+            dest: /usr/local/lib/python3.13/site-packages
+
 manifests:
   kustomize:
     paths:
@@ -68,7 +80,7 @@ manifests:
       - --load-restrictor=LoadRestrictionsNone
 
 deploy:
-  kubeContext: kind-sesam-poc   # kind cluster created by `just cluster-create`
+  kubeContext: kind-sesam-poc # kind cluster created by `just cluster-create`
 
 # Port-forward from the kind cluster to localhost inside the devcontainer.
 portForward:
@@ -77,6 +89,21 @@ portForward:
     namespace: sesam-poc
     port: 5432
     localPort: 5432
+  - resourceType: Service
+    resourceName: sesam-dashboard
+    namespace: sesam-poc
+    port: 8888
+    localPort: 8888
+  - resourceType: Service
+    resourceName: grafana
+    namespace: sesam-poc
+    port: 3000
+    localPort: 3000
+  - resourceType: Service
+    resourceName: prometheus
+    namespace: sesam-poc
+    port: 9090
+    localPort: 9095 # avoids collision with ingest's 9090 forward
 
   - resourceType: Service
     resourceName: inandout-simulator

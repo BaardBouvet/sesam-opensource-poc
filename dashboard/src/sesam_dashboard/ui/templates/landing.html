@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Schema & Pipeline — Sesam Dashboard{% endblock %}
+{% block nav_schema %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-100 mb-6">Schema &amp; Pipeline State</h1>
+
+{# ── Component gate ──────────────────────────────────────────────────────── #}
+{% set gated = component_gate | selectattr("desired", "ne", "running") | list %}
+{% if gated %}
+<div class="mb-6 rounded-xl border border-amber-600 bg-amber-900/30 px-5 py-4">
+    <p class="font-semibold text-amber-300 mb-1">⚠ Schema-manager gate is not open</p>
+    <p class="text-sm text-amber-200/80">
+        Ingest and writeback will not process any rows until the schema-manager sets
+        <code>desired = 'running'</code>. Check the schema-manager logs or trigger a
+        reconcile from the <a href="/ui/control" class="underline">Control</a> page.
+    </p>
+    <table class="mt-3 text-xs text-amber-200 border-separate border-spacing-x-4">
+        <thead>
+            <tr class="text-amber-400">
+                <th class="text-left">component</th>
+                <th class="text-left">desired</th>
+                <th class="text-left">schema_version</th>
+                <th class="text-left">updated_at</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in component_gate %}
+            <tr>
+                <td>{{ row.component }}</td>
+                <td
+                    class="{% if row.desired == 'running' %}text-green-400{% else %}text-amber-300 font-semibold{% endif %}">
+                    {{ row.desired }}</td>
+                <td>{{ row.schema_version or '—' }}</td>
+                <td>{{ row.updated_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="mb-6 rounded-xl border border-green-700 bg-green-900/20 px-5 py-3 flex items-center gap-3">
+    <span class="text-green-400 font-semibold">✓ Schema-manager gate open</span>
+    <span class="text-sm text-green-300/70">Both components at <code>desired = running</code></span>
+</div>
+{% endif %}
+
+{# ── Two-column layout ───────────────────────────────────────────────────── #}
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+    {# ── pg-trickle stream state ─────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-slate-300 mb-3">pg-trickle Streams</h2>
+        {% if not streams %}
+        <p class="text-sm text-slate-500 italic">pgtrickle.quick_health not available — pg-trickle may not be installed.
+        </p>
+        {% else %}
+        <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+            <table class="w-full text-xs">
+                <thead class="bg-slate-800 text-slate-400">
+                    <tr>
+                        <th class="text-left px-4 py-2">stream</th>
+                        <th class="text-left px-4 py-2">status</th>
+                        <th class="text-right px-4 py-2">lag rows</th>
+                        <th class="text-right px-4 py-2">lag bytes</th>
+                        <th class="text-left px-4 py-2">last event</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for s in streams %}
+                    <tr class="hover:bg-slate-800/50">
+                        <td class="px-4 py-2 font-mono text-slate-200">{{ s.stream_name }}</td>
+                        <td class="px-4 py-2">
+                            <span class="px-2 py-0.5 rounded text-xs font-semibold {{ s.status | status_class }}">{{
+                                s.status }}</span>
+                        </td>
+                        <td class="px-4 py-2 text-right text-slate-400">{{ s.lag_rows if s.lag_rows is not none else '—'
+                            }}</td>
+                        <td class="px-4 py-2 text-right text-slate-400">{{ s.lag_bytes if s.lag_bytes is not none else
+                            '—' }}</td>
+                        <td class="px-4 py-2 text-slate-400">{{ s.last_event_at or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+    {# ── Source table checklist ──────────────────────────────────────────── #}
+    <section>
+        <h2 class="text-base font-semibold text-slate-300 mb-3">Source Tables</h2>
+        <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+            <table class="w-full text-xs">
+                <thead class="bg-slate-800 text-slate-400">
+                    <tr>
+                        <th class="text-left px-4 py-2">table</th>
+                        <th class="text-right px-4 py-2">rows</th>
+                        <th class="text-left px-4 py-2">last ingested</th>
+                        <th class="text-left px-4 py-2">pgt tracked</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for src in sources %}
+                    <tr class="hover:bg-slate-800/50 {% if not src.exists %}opacity-50{% endif %}">
+                        <td class="px-4 py-2 font-mono text-slate-200">
+                            {{ src.table_name }}
+                            {% if not src.exists %}<span
+                                class="ml-2 text-red-400 font-sans font-semibold">MISSING</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-right text-slate-300">{{ src.row_count if src.row_count is not none
+                            else '—' }}</td>
+                        <td class="px-4 py-2 text-slate-400">{{ src.last_ingested or '—' }}</td>
+                        <td class="px-4 py-2">
+                            {% if src.pgtrickle_tracked %}
+                            <span class="text-green-400">✓</span>
+                            {% else %}
+                            <span class="text-slate-500">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</div>{# end two-column #}
+
+{# ── OSI view checklist ──────────────────────────────────────────────────── #}
+<section class="mt-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">OSI Mapping Views</h2>
+    {% set broken = view_checklist | selectattr("valid", "eq", false) | list %}
+    {% if broken %}
+    <div class="mb-3 rounded-lg border border-red-700 bg-red-900/20 px-4 py-2 text-sm text-red-300">
+        {{ broken | length }} view(s) are broken or missing — see table below.
+    </div>
+    {% endif %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">view</th>
+                    <th class="text-left px-4 py-2">exists</th>
+                    <th class="text-left px-4 py-2">valid</th>
+                    <th class="text-right px-4 py-2">rows</th>
+                    <th class="text-left px-4 py-2">error</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for v in view_checklist %}
+                <tr class="hover:bg-slate-800/50 {% if v.valid == false %}bg-red-950/40{% endif %}">
+                    <td class="px-4 py-2 font-mono text-slate-200">{{ v.view_name }}</td>
+                    <td class="px-4 py-2">
+                        {% if v.exists %}<span class="text-green-400">✓</span>
+                        {% else %}<span class="text-red-400 font-semibold">✗</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-2">
+                        {% if v.valid == true %}<span class="text-green-400">✓</span>
+                        {% elif v.valid == false %}<span class="text-red-400 font-semibold">✗</span>
+                        {% else %}<span class="text-slate-600">—</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-right text-slate-300">{{ v.row_count if v.row_count is not none else '—'
+                        }}</td>
+                    <td class="px-4 py-2 text-red-400 font-mono max-w-xs truncate" title="{{ v.error_msg or '' }}">
+                        {{ v.error_msg or '' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ── Pipeline data-flow counts ───────────────────────────────────────────── #}
+<section class="mt-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Pipeline Data-Flow Counts</h2>
+    <p class="text-xs text-slate-500 mb-3">
+        Counts at each layer. A drop between columns points to the broken stage.
+    </p>
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">mapping → target</th>
+                    <th class="text-right px-4 py-2">ingested</th>
+                    <th class="text-right px-4 py-2">forwarded</th>
+                    <th class="text-right px-4 py-2">clusters</th>
+                    <th class="text-right px-4 py-2">resolved</th>
+                    <th class="text-right px-4 py-2">pending write</th>
+                    <th class="text-right px-4 py-2">written</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for r in flow %}
+                <tr class="hover:bg-slate-800/50">
+                    <td class="px-4 py-2 font-mono text-slate-200">
+                        {{ r.mapping_name }} → <span class="text-sky-400">{{ r.target }}</span>
+                    </td>
+                    {% macro count_cell(val) %}
+                    <td
+                        class="px-4 py-2 text-right {% if val is none %}text-slate-600{% else %}text-slate-300{% endif %}">
+                        {{ val if val is not none else '—' }}
+                    </td>
+                    {% endmacro %}
+                    {{ count_cell(r.src_count) }}
+                    {{ count_cell(r.fwd_count) }}
+                    {{ count_cell(r.cluster_count) }}
+                    {{ count_cell(r.resolved_count) }}
+                    {{ count_cell(r.pending_count) }}
+                    {{ count_cell(r.written_count) }}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{% endblock %}

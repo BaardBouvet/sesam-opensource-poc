@@ -12,6 +12,7 @@ resources:
   - ingest.yaml
   - writeback.yaml
   - simulator.yaml
+  - dashboard.yaml
 
 # Generate ConfigMaps directly from source files.
 # Requires --load-restrictor=LoadRestrictionsNone (set in skaffold.yaml buildArgs)

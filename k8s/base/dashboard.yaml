@@ -1,0 +1,97 @@
+# Dashboard — operational UI for schema state, pg-trickle streams, and pipeline data-flow counts.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sesam-dashboard
+  namespace: sesam-poc
+  labels:
+    app: sesam-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sesam-dashboard
+  template:
+    metadata:
+      labels:
+        app: sesam-dashboard
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -U inandout >/dev/null 2>&1; do
+                sleep 2
+              done
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+        - name: wait-for-schema-manager
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf http://inandout-schema-manager:9080/ready >/dev/null 2>&1; do
+                sleep 3
+              done
+      containers:
+        - name: dashboard
+          image: sesam-dashboard:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DASHBOARD_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sesam-credentials
+                  key: INOUT_DATABASE_URL
+            - name: DASHBOARD_MAPPING_FILE
+              value: /config/mapping.yaml
+            - name: DASHBOARD_INGEST_URL
+              value: http://inandout-ingest:9090
+            - name: DASHBOARD_SCHEMA_MANAGER_URL
+              value: http://inandout-schema-manager:9080
+          ports:
+            - name: http
+              containerPort: 8888
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8888
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: osi-mapping-config
+              mountPath: /config
+      volumes:
+        - name: osi-mapping-config
+          configMap:
+            name: osi-mapping-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sesam-dashboard
+  namespace: sesam-poc
+  labels:
+    app: sesam-dashboard
+spec:
+  ports:
+    - name: http
+      port: 8888
+      targetPort: 8888
+  selector:
+    app: sesam-dashboard
