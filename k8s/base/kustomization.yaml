@@ -8,10 +8,10 @@ resources:
   - secret.yaml
   - configmap.yaml
   - postgres.yaml
+  - schema-manager.yaml
   - ingest.yaml
   - writeback.yaml
   - simulator.yaml
-  - pgtrickle-setup.yaml
 
 # Generate ConfigMaps directly from source files.
 # Requires --load-restrictor=LoadRestrictionsNone (set in skaffold.yaml buildArgs)
@@ -31,6 +31,13 @@ configMapGenerator:
     files:
       - hubspot.yaml=../../connectors/hubspot.yaml
       - tripletex.yaml=../../connectors/tripletex.yaml
+
+  - name: schema-manager-config
+    namespace: sesam-poc
+    options:
+      disableNameSuffixHash: true
+    files:
+      - schema-manager.yaml=../../vendor/schema-manager/schema-manager.yaml
 
 labels:
   - pairs:

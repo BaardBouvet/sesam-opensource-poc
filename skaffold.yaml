@@ -39,6 +39,22 @@ build:
       docker:
         dockerfile: docker/osi-mapping.Dockerfile
 
+    # ── Schema-manager (DDL lifecycle supervisor) ─────────────────────────────
+    # Context is the workspace root so vendor/ subdirectories, mapping.yaml,
+    # and connectors/ are all accessible.
+    - image: sesam-schema-manager
+      context: .
+      docker:
+        dockerfile: docker/schema-manager.Dockerfile
+      sync:
+        manual:
+          - src: "vendor/schema-manager/schema_manager/**/*.py"
+            dest: /usr/local/lib/python3.13/site-packages
+          - src: "mapping.yaml"
+            dest: /config
+          - src: "connectors/*.yaml"
+            dest: /config/connectors
+
 manifests:
   kustomize:
     paths:
@@ -74,3 +90,9 @@ portForward:
     namespace: sesam-poc
     port: 9091
     localPort: 9091
+
+  - resourceType: Service
+    resourceName: schema-manager
+    namespace: sesam-poc
+    port: 9080
+    localPort: 9080

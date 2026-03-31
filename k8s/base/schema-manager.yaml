@@ -2,22 +2,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: inandout-writeback
+  name: schema-manager
   namespace: sesam-poc
   labels:
-    app: inandout-writeback
+    app: schema-manager
 spec:
   replicas: 1
+  strategy:
+    type: Recreate          # single writer — no overlap during rollout
   selector:
     matchLabels:
-      app: inandout-writeback
+      app: schema-manager
   template:
     metadata:
       labels:
-        app: inandout-writeback
+        app: schema-manager
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "9091"
+        prometheus.io/port: "9080"
         prometheus.io/path: "/metrics"
     spec:
       initContainers:
@@ -35,13 +37,12 @@ spec:
             - secretRef:
                 name: sesam-credentials
       containers:
-        - name: writeback
-          image: inandout-engine:latest
+        - name: schema-manager
+          image: sesam-schema-manager:latest
           imagePullPolicy: IfNotPresent
-          command: ["inandout", "writeback", "run", "--config", "/config/writeback.yaml"]
           ports:
             - name: health
-              containerPort: 9091
+              containerPort: 9080
           envFrom:
             - secretRef:
                 name: sesam-credentials
@@ -55,39 +56,46 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 9091
+              port: 9080
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /ready
-              port: 9091
+              port: 9080
             initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:
-            - name: config
-              mountPath: /config
+            - name: mapping
+              mountPath: /config/mapping.yaml
+              subPath: mapping.yaml
             - name: connectors
-              mountPath: /connectors
+              mountPath: /config/connectors
+            - name: schema-manager-config
+              mountPath: /config/schema-manager.yaml
+              subPath: schema-manager.yaml
       volumes:
-        - name: config
+        - name: mapping
           configMap:
-            name: inandout-config
+            name: osi-mapping-config
         - name: connectors
           configMap:
             name: inandout-connectors
+        - name: schema-manager-config
+          configMap:
+            name: schema-manager-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: inandout-writeback
+  name: schema-manager
   namespace: sesam-poc
   labels:
-    app: inandout-writeback
+    app: schema-manager
 spec:
   ports:
     - name: health
-      port: 9091
-      targetPort: 9091
+      port: 9080
+      targetPort: 9080
   selector:
-    app: inandout-writeback
+    app: schema-manager

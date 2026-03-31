@@ -55,13 +55,15 @@ redeploy:
     skaffold run --kubeconfig=$HOME/.kube/config --cache-artifacts=false
 
 # Forward all service ports to localhost (VS Code will expose them to the host)
-# simulator: http://localhost:6100  ingest: http://localhost:9090
-# writeback: http://localhost:9091  postgres: localhost:5432
+# simulator: http://localhost:6100   ingest: http://localhost:9090
+# writeback: http://localhost:9091   schema-manager: http://localhost:9080
+# postgres:  localhost:5432
 [group('dev')]
 forward:
     kubectl -n {{NAMESPACE}} port-forward svc/inandout-simulator 6100:6100 &
     kubectl -n {{NAMESPACE}} port-forward svc/inandout-ingest    9090:9090 &
     kubectl -n {{NAMESPACE}} port-forward svc/inandout-writeback 9091:9091 &
+    kubectl -n {{NAMESPACE}} port-forward svc/schema-manager     9080:9080 &
     kubectl -n {{NAMESPACE}} port-forward statefulset/postgres   5432:5432 &
     wait
 
@@ -78,20 +80,29 @@ psql:
     psql postgresql://inandout:${POSTGRES_PASSWORD:-changeme}@localhost:5432/inandout
 
 # Wipe all data and re-run schema setup — no redeploy needed.
-# Drops the public schema, then bounces ingest so init containers recreate everything.
+# Drops the public schema, then triggers a schema-manager reconcile.
 [group('db')]
 empty-db:
     kubectl -n {{NAMESPACE}} exec statefulset/postgres -- \
         psql -U inandout -d inandout -c \
         "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-    just migrate
+    just reconcile
 
-# Re-run schema setup: bounce ingest and pgtrickle-setup so they re-run their init containers
-# (osi-render → convert → db-upgrade on ingest; wait-for-sources → apply-pgtrickle on pgtrickle-setup)
+# Trigger the schema-manager to reconcile DDL immediately
+[group('db')]
+reconcile:
+    curl -sf -X POST http://localhost:9080/reconcile
+
+# Promote writeback from shadow mode to running
+[group('db')]
+promote:
+    curl -sf -X POST http://localhost:9080/promote
+
+# Re-run schema setup: bounce the schema-manager so it re-reconciles on startup
 [group('db')]
 migrate:
-    kubectl -n {{NAMESPACE}} rollout restart deployment/inandout-ingest deployment/pgtrickle-setup
-    kubectl -n {{NAMESPACE}} rollout status  deployment/inandout-ingest
+    kubectl -n {{NAMESPACE}} rollout restart deployment/schema-manager
+    kubectl -n {{NAMESPACE}} rollout status  deployment/schema-manager
 
 # ── Observability ─────────────────────────────────────────────────────────────
 
@@ -109,6 +120,11 @@ logs-writeback:
 [group('obs')]
 logs-sim:
     kubectl -n {{NAMESPACE}} logs -f deployment/inandout-simulator
+
+# Tail schema-manager logs
+[group('obs')]
+logs-schema-manager:
+    kubectl -n {{NAMESPACE}} logs -f deployment/schema-manager
 
 # Show all pod statuses
 [group('obs')]

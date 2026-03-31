@@ -34,19 +34,6 @@ spec:
           envFrom:
             - secretRef:
                 name: sesam-credentials
-
-        # 2. Run Alembic migrations
-        - name: db-upgrade
-          image: inandout-engine:latest
-          imagePullPolicy: IfNotPresent
-          command:
-            ["inandout", "db", "upgrade", "--config", "/config/ingestion.yaml"]
-          envFrom:
-            - secretRef:
-                name: sesam-credentials
-          volumeMounts:
-            - name: config
-              mountPath: /config
       containers:
         - name: ingest
           image: inandout-engine:latest

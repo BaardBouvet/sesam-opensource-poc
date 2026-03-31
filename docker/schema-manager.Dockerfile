@@ -41,8 +41,8 @@ COPY --from=osi /usr/local/bin/convert_matviews_to_pgtrickle.py /usr/local/bin/
 
 # inandout CLI + Alembic migrations
 COPY --from=inandout /app/.venv /opt/inandout-venv
-COPY --from=inandout /app/migrations /opt/inandout/migrations
-COPY --from=inandout /app/alembic.ini /opt/inandout/alembic.ini
+COPY vendor/in-and-out/engine/migrations/ /opt/inandout/migrations/
+COPY vendor/in-and-out/engine/alembic.ini /opt/inandout/alembic.ini
 ENV INANDOUT_VENV="/opt/inandout-venv"
 
 # psql client
