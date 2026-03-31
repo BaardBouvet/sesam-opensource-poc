@@ -31,16 +31,6 @@ spec:
           envFrom:
             - secretRef:
                 name: sesam-credentials
-        - name: wait-for-schema-manager
-          image: postgres-pgtrickle:latest
-          imagePullPolicy: IfNotPresent
-          command:
-            - sh
-            - -c
-            - |
-              until curl -sf http://schema-manager:9080/ready >/dev/null 2>&1; do
-                sleep 3
-              done
       containers:
         - name: dashboard
           image: sesam-dashboard:latest
