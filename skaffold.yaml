@@ -48,9 +48,9 @@ build:
         dockerfile: docker/schema-manager.Dockerfile
       requires:
         - image: osi-mapping-engine
-          alias: osi-mapping-engine
+          alias: OSI_MAPPING_ENGINE
         - image: inandout-engine
-          alias: inandout-engine
+          alias: INANDOUT_ENGINE
       sync:
         manual:
           - src: "vendor/schema-manager/schema_manager/**/*.py"
