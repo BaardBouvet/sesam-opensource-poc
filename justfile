@@ -11,13 +11,20 @@ NAMESPACE    := "sesam-poc"
 
 # Bootstrap the full local environment (cluster + deploy)
 [group('setup')]
-bootstrap: cluster-create submodules deploy
+bootstrap: cluster-create submodules seed-images deploy
 
 # Create the kind cluster (skips if already exists)
 [group('setup')]
 cluster-create:
     kind get clusters | grep -q '^{{KIND_CLUSTER}}$' \
         || kind create cluster --name {{KIND_CLUSTER}}
+
+# Pull external images that aren't built by Skaffold and load them into kind
+# (kind load docker-image can't handle multi-platform manifests, so we pipe via ctr import)
+[group('setup')]
+seed-images:
+    docker pull curlimages/curl:latest
+    docker save curlimages/curl:latest | docker exec -i {{KIND_CLUSTER}}-control-plane ctr --namespace=k8s.io images import -
 
 # Delete the kind cluster
 [group('setup')]

@@ -35,20 +35,27 @@ spec:
             - secretRef:
                 name: sesam-credentials
         - name: wait-for-schema-manager
-          image: inandout-engine:latest
+          image: curlimages/curl:latest
           imagePullPolicy: IfNotPresent
           command:
             - sh
             - -c
             - |
-              until wget -qO- http://schema-manager:9080/ready >/dev/null 2>&1; do
+              until curl -sf http://schema-manager:9080/ready >/dev/null 2>&1; do
                 sleep 3
               done
       containers:
         - name: writeback
           image: inandout-engine:latest
           imagePullPolicy: IfNotPresent
-          command: ["inandout", "writeback", "run", "--config", "/config/writeback.yaml"]
+          command:
+            [
+              "inandout",
+              "writeback",
+              "run",
+              "--config",
+              "/config/writeback.yaml",
+            ]
           ports:
             - name: health
               containerPort: 9091
