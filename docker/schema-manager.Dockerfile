@@ -16,10 +16,10 @@
 # =============================================================================
 
 # ── Stage 1: OSI-mapping engine (Rust binary + convert script) ────────────────
-FROM osi-mapping-engine:latest AS osi
+FROM osi-mapping-engine AS osi
 
 # ── Stage 2: In-and-out engine (inandout CLI + Alembic migrations) ────────────
-FROM inandout-engine:latest AS inandout
+FROM inandout-engine AS inandout
 
 # ── Stage 3: Schema-manager Python build ──────────────────────────────────────
 FROM python:3.13-slim AS builder
