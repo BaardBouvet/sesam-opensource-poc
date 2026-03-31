@@ -1,0 +1,14 @@
+database:
+  dsn: "${WRITEBACK_DATABASE_URL}"
+connectors_dir: /connectors
+namespace: public
+health_server:
+  listen: "0.0.0.0:9091"
+observability:
+  logging:
+    format: json
+    level: info
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false
