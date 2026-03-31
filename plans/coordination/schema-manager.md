@@ -208,7 +208,7 @@ startup
 │
 ├─► Connect to Postgres, wait for readiness
 ├─► Acquire leader lock (exit if another instance holds it)
-├─► Ensure component_state table exists
+├─► Run self-upgrade (ensure component_state, migration_state, shadow_log exist)
 ├─► Set desired = 'stopped' for all components
 │
 ├─► Read all config inputs:
@@ -222,7 +222,7 @@ startup
 │   ├── Generated views via osi-engine render
 │   └── Stream tables via convert_matviews_to_pgtrickle.py
 │
-├─► Compute config hash (SHA-256 of mapping.yaml + connectors/*.yaml)
+├─► Compute config hash (SHA-256 of mapping.yaml + schema-relevant connector fields)
 ├─► Compare to schema_version in component_state
 │
 ├─► If hash unchanged AND all tables/views exist:
@@ -673,8 +673,9 @@ schema-manager/
 │   ├── applier.py           # Apply generated SQL to Postgres
 │   ├── component_gate.py    # Manage component_state table + advisory lock barrier
 │   ├── shadow.py            # Shadow mode policy, promotion, shadow_log queries
-│   ├── health.py            # /health, /ready, /promote endpoints
-│   └── watcher.py           # Watch loop: inotify on /config/ + periodic fallback
+│   ├── health.py            # /health, /ready, /promote, /metrics endpoints
+│   ├── watcher.py           # Watch loop: inotify on /config/ + periodic fallback
+│   └── self_upgrade.py      # Version-gated DDL for schema-manager's own tables
 ```
 
 ## Startup Ordering (After Implementation)
@@ -682,15 +683,15 @@ schema-manager/
 ```
 1. Postgres starts, becomes ready
 2. Schema-manager starts, connects to Postgres
-3. Schema-manager creates component_state, migration_state tables
-4. Schema-manager sets desired = 'stopped' for ingest and writeback
-5. Ingest and writeback start, find desired = 'stopped', idle
-6. Schema-manager applies DDL (stubs → Alembic → views → streams)
-7. Schema-manager waits for stream tables to be ready
-8. Schema-manager sets desired = 'running' for ingest
-9. Ingest begins polling APIs and writing to staging tables
-10. Schema-manager sets desired = 'running' for writeback
-11. Writeback begins processing sync queue
+3. Schema-manager acquires leader lock
+4. Schema-manager runs self-upgrade (component_state, migration_state, shadow_log)
+5. Schema-manager sets desired = 'stopped' for ingest and writeback
+6. Ingest and writeback start, find desired = 'stopped', idle
+7. Schema-manager applies DDL (stubs → Alembic → views → streams)
+8. Schema-manager sets desired = 'running' for ingest (can resume during stream rebuild)
+9. Schema-manager waits for stream tables to be ready
+10. Schema-manager sets desired = 'shadow' or 'running' for writeback (per policy)
+11. Writeback begins processing (shadow or live)
 ```
 
 Steps 5-6 can happen concurrently — ingest and writeback are idling while the schema-manager works. No init containers, no Job ordering, no race conditions.
@@ -920,6 +921,270 @@ shadow_mode:
 
 If `auto_promote_after` is set, the schema-manager's watch loop checks whether the shadow period has elapsed and no anomalies were detected (e.g., delete count below threshold, change volume within historical norms). If conditions are met, it promotes automatically. This is a future enhancement — manual promotion is the default.
 
+## Config Hash Scope
+
+The config hash determines whether a reconcile triggers DDL changes. It must cover only **schema-relevant** inputs — otherwise unrelated config changes (rate limits, timeouts, auth tokens) would unnecessarily pause components and re-apply DDL.
+
+The hash covers:
+- `mapping.yaml` — full file (any change may affect views)
+- `connectors/*.yaml` — **only** the `entities:` section (which tables to create). The `connection`, `auth`, `rate_limit`, `retry`, `circuit_breaker`, and `webhooks` sections are excluded.
+- Alembic revision head (from in-and-out engine)
+
+The schema-manager extracts the schema-relevant portions before hashing:
+
+```python
+def compute_config_hash(mapping_path, connector_paths, alembic_head):
+    h = hashlib.sha256()
+    h.update(Path(mapping_path).read_bytes())
+    for path in sorted(connector_paths):
+        connector = yaml.safe_load(Path(path).read_text())
+        # Hash only entities, not connection/auth/rate_limit
+        entities = connector.get("connector", {}).get("entities", {})
+        h.update(yaml.dump(entities, sort_keys=True).encode())
+    h.update(alembic_head.encode())
+    return f"sha256:{h.hexdigest()}"
+```
+
+This means changing a rate limit or API token does **not** trigger a schema reconcile. Only adding/removing entities or changing the mapping triggers DDL.
+
+## Observability
+
+The schema-manager is the most critical component — if it's broken, nothing works. It needs comprehensive observability.
+
+### Metrics (Prometheus)
+
+Exposed on the health port (9080) at `/metrics`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `schema_manager_reconcile_total` | Counter | Total reconcile attempts, labelled by `tier` and `result` (success/failure) |
+| `schema_manager_reconcile_duration_seconds` | Histogram | Time spent in each reconcile cycle |
+| `schema_manager_component_desired_state` | Gauge | Current `desired` state per component (0=stopped, 1=running, 2=shadow) |
+| `schema_manager_migration_gate_held_seconds` | Histogram | How long the exclusive advisory lock was held |
+| `schema_manager_shadow_log_size` | Gauge | Number of unsuppressed rows in `shadow_log` |
+| `schema_manager_config_hash` | Info | Current config hash (for label joins) |
+| `schema_manager_last_reconcile_timestamp` | Gauge | Unix timestamp of last successful reconcile |
+| `schema_manager_stream_rebuild_duration_seconds` | Histogram | Time waiting for stream tables to populate after DDL |
+
+### Structured logging
+
+Every lifecycle step emits a JSON log event with:
+- `event`: step name (e.g. `reconcile_start`, `ddl_apply`, `component_resume`, `shadow_enter`)
+- `tier`: change classification tier
+- `config_hash`: current hash
+- `duration_ms`: elapsed time for the step
+- `error`: error message if the step failed
+
+Example:
+```json
+{"event": "reconcile_start", "tier": 1, "config_hash": "sha256:abc123", "ts": "2026-03-31T12:00:00Z"}
+{"event": "ddl_apply", "tier": 1, "duration_ms": 342, "config_hash": "sha256:abc123"}
+{"event": "component_resume", "component": "writeback", "desired": "shadow"}
+```
+
+### Alerting rules (Prometheus/Alertmanager)
+
+```yaml
+# Schema-manager has not reconciled successfully in 10 minutes
+- alert: SchemaManagerReconcileStale
+  expr: time() - schema_manager_last_reconcile_timestamp > 600
+  for: 5m
+  labels:
+    severity: warning
+
+# Components stuck in stopped state for more than 5 minutes
+- alert: ComponentsStuckStopped
+  expr: schema_manager_component_desired_state == 0
+  for: 5m
+  labels:
+    severity: critical
+
+# Shadow log growing without promotion
+- alert: ShadowLogUnreviewed
+  expr: schema_manager_shadow_log_size > 1000
+  for: 1h
+  labels:
+    severity: warning
+```
+
+## Graceful Shutdown
+
+When the schema-manager pod is terminated (rolling update, node drain, `SIGTERM`), it must shut down cleanly:
+
+1. **Stop the watch loop** — no new reconcile cycles.
+2. **If mid-migration**: the DDL transaction rolls back automatically (Postgres). The exclusive advisory lock is released when the session closes. Components remain in `desired = 'stopped'` — the new instance will detect this and resume the reconcile.
+3. **Do NOT set `desired = 'stopped'` on shutdown.** The current component states should be preserved. If components are running, the new schema-manager instance will start, acquire the leader lock, check the hash, find no changes, and leave them running.
+4. **Release the leader lock explicitly** via `pg_advisory_unlock(LEADER_LOCK_KEY)` in the shutdown handler. This allows the replacement instance to acquire it immediately instead of waiting for the session timeout.
+5. **Close database connections cleanly** to avoid leaked sessions.
+
+```python
+import signal
+
+def shutdown_handler(signum, frame):
+    log.info("Shutting down...")
+    watch_loop.stop()
+    if leader_lock_held:
+        db.execute("SELECT pg_advisory_unlock(%s)", [LEADER_LOCK_KEY])
+    db.close()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
+```
+
+Kubernetes sends `SIGTERM` and waits `terminationGracePeriodSeconds` (default 30s) before `SIGKILL`. The schema-manager should complete shutdown well within this window since there's no long-running work to finish (any in-flight migration is rolled back by the transaction).
+
+## Long Stream Rebuilds
+
+After dropping and recreating generated views and stream tables, pg-trickle must rebuild the stream tables from scratch. On large datasets this can take minutes or hours. During this time, the plan currently keeps both ingest and writeback paused.
+
+For the PoC, this is acceptable — datasets are small. For production, two mitigations:
+
+### Allow ingest to resume during stream rebuilds
+
+Ingest writes to staging tables, which are unaffected by view/stream recreation. The schema-manager can release the ingest advisory lock and set `desired = 'running'` for ingest immediately after DDL is applied — before streams are fully populated. pg-trickle will incrementally process the new data as it arrives alongside the initial backfill.
+
+Writeback remains paused until streams are ready, because it reads from the generated views which depend on stream tables.
+
+This reduces the disruption window for ingest from "full rebuild time" to "DDL apply time" (~seconds).
+
+### Stream readiness detection
+
+The schema-manager needs to know when stream tables are "ready enough" for writeback to resume. Options:
+
+1. **Row count comparison**: compare stream table row count to source staging table count. When they converge (within a threshold), streams are ready. Simple but imprecise for tables with deletes.
+2. **pg-trickle watermark**: if pg-trickle exposes an LSN or progress indicator, the schema-manager can wait for it to reach the current WAL position.
+3. **Timeout with verification**: wait a configurable duration (e.g. 60s for PoC), then spot-check a sample of golden records against expected values.
+
+For the PoC, option 3 (timeout) is simplest. Option 2 is preferred long-term if pg-trickle supports it.
+
+## Schema-Manager Configuration
+
+The schema-manager's own configuration lives in a YAML file at `/config/schema-manager.yaml`:
+
+```yaml
+# schema-manager.yaml
+database:
+  dsn: "${INOUT_DATABASE_URL}"
+
+config_paths:
+  mapping: /config/mapping.yaml
+  connectors: /config/connectors/
+
+health_server:
+  listen: "0.0.0.0:9080"
+
+watch:
+  poll_interval: 30          # seconds between fallback hash checks
+  stream_ready_timeout: 60   # seconds to wait for stream tables after DDL
+
+shadow_mode:
+  on_change: always          # 'always' | 'new_targets_only' | 'never'
+  auto_promote_after: null   # e.g. '24h' to auto-promote
+
+observability:
+  logging:
+    format: json
+    level: info
+  metrics:
+    enabled: true
+```
+
+This file is baked into the Docker image and can be overridden by a ConfigMap mount in production. Environment variable substitution (e.g. `${INOUT_DATABASE_URL}`) is supported for secrets.
+
+The dev overlay can set `shadow_mode.on_change: never` to skip shadow mode during local development.
+
+## Testing Strategy
+
+The schema-manager is complex enough to require tests at three levels:
+
+### Unit tests
+
+Pure Python tests (no database) for:
+- Config hash computation (verify that non-schema fields are excluded)
+- Change tier classification (given old and new config, verify correct tier)
+- Stub DDL generation (given `sources:` section, verify correct `CREATE TABLE` SQL)
+- Shadow mode policy logic (given tier and policy, verify correct desired state)
+
+### Integration tests (testcontainers)
+
+Spin up a real Postgres (with pg-trickle) via testcontainers-python:
+- Full reconcile cycle: apply stubs → Alembic → views → streams → verify all objects exist
+- Config change: modify mapping, reconcile again, verify views are updated
+- Advisory lock barrier: start multiple mock "replicas" holding shared locks, verify schema-manager blocks until they release
+- Shadow mode: verify writeback enters shadow, `shadow_log` is populated, promotion works
+- Rollback: verify `schema-manager rollback` restores previous SQL
+- Leader election: start two schema-manager instances, verify only one acquires the lock
+
+### End-to-end tests (kind cluster)
+
+Full Kubernetes deployment:
+- Deploy from scratch, verify startup ordering (schema-manager → ingest → writeback)
+- Change `mapping.yaml`, trigger Skaffold file sync, verify reconcile completes in ~2s
+- Scale writeback to 3 replicas, trigger config change, verify all replicas pause before DDL
+- Promote from shadow to live, verify writeback starts pushing to simulator
+- Kill schema-manager pod, verify components continue running, new instance takes over
+
+### Test location
+
+```
+schema-manager/
+├── tests/
+│   ├── unit/
+│   │   ├── test_config.py
+│   │   ├── test_tiers.py
+│   │   ├── test_stubs.py
+│   │   └── test_shadow_policy.py
+│   ├── integration/
+│   │   ├── conftest.py          # testcontainers fixtures
+│   │   ├── test_reconcile.py
+│   │   ├── test_advisory_locks.py
+│   │   ├── test_shadow_mode.py
+│   │   └── test_leader_election.py
+│   └── e2e/
+│       └── test_full_deploy.py  # requires kind cluster
+```
+
+## Schema-Manager Self-Upgrade
+
+The schema-manager manages everyone else's schema, but what about its own tables (`component_state`, `migration_state`, `shadow_log`)? When a new schema-manager version needs to change these tables, it needs its own migration path.
+
+Approach: **version-gated idempotent DDL** at startup.
+
+The schema-manager stores its own version in `migration_state`:
+
+```sql
+-- ('schema_manager_version', '1')  -- current internal schema version
+```
+
+On startup, the schema-manager checks its internal version and applies upgrade steps if needed:
+
+```python
+INTERNAL_VERSION = 2  # bump when component_state/migration_state/shadow_log schema changes
+
+def self_upgrade(db):
+    current = db.execute(
+        "SELECT value FROM migration_state WHERE key = 'schema_manager_version'"
+    ).scalar() or "0"
+
+    if int(current) < 1:
+        # v1: initial schema
+        db.execute(CREATE_COMPONENT_STATE)
+        db.execute(CREATE_MIGRATION_STATE)
+
+    if int(current) < 2:
+        # v2: add shadow_log table
+        db.execute(CREATE_SHADOW_LOG)
+
+    db.execute(
+        "INSERT INTO migration_state (key, value) VALUES ('schema_manager_version', %s) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        [str(INTERNAL_VERSION)]
+    )
+```
+
+This runs before any other reconcile logic, so the schema-manager's own tables are always up to date. Each upgrade step is idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). No external migration tool is needed — the schema-manager bootstraps itself.
+
 ## What Gets Deleted
 
 | Current artifact | Replaced by |
@@ -947,6 +1212,6 @@ If `auto_promote_after` is set, the schema-manager's watch loop checks whether t
 
 ## Open Questions
 
-- Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on the periodic watch loop?
-- How should we detect that pg-trickle stream tables are "fully populated" after recreation? Row count comparison, a watermark table, or a fixed delay?
+- Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on inotify + periodic fallback?
+- Does pg-trickle expose an LSN or progress indicator for stream table readiness? If not, which fallback (row count comparison, timeout, or spot-check) should be the default?
 - Should auto-promotion be supported (promote after N hours with no anomalies), or should promotion always be manual?
