@@ -7,3 +7,6 @@
 [submodule "vendor/osi-mapping"]
 	path = vendor/osi-mapping
 	url = https://github.com/BaardBouvet/OSI-mapping.git
+[submodule "vendor/schema-manager"]
+	path = vendor/schema-manager
+	url = https://github.com/grove/schema-manager
