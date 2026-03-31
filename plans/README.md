@@ -77,7 +77,7 @@ Covers person, company, association, and country vocabulary — including resolu
 Orchestration: Dagster (schedules + sensors)
 Webhooks: Phase 2 optional (see `ingest/webhooks.md`)
 Tracing: Phase 2 optional (OpenTelemetry)
-Monitoring: Phase 2 optional (Prometheus + Grafana)
+Monitoring: Prometheus + Grafana (see `ops/observability-setup.md`)
 Simulators: FastAPI mock servers
 ```
 

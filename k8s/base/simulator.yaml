@@ -18,6 +18,20 @@ spec:
       labels:
         app: inandout-simulator
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -U inandout >/dev/null 2>&1; do
+                sleep 2
+              done
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
       containers:
         - name: simulator
           image: inandout-simulator:latest

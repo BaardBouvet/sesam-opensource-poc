@@ -103,6 +103,15 @@ spec:
 
               echo "Applying pg_trickle stream-table SQL..."
               psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -f /shared/pgtrickle.sql
+
+              echo "Setting refresh schedules on leaf delta stream tables..."
+              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_companies',   schedule => '30s');
+                SELECT pgtrickle.alter_stream_table('_delta_tripletex_customers', schedule => '30s');
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_contacts',    schedule => '30s');
+                SELECT pgtrickle.alter_stream_table('_delta_tripletex_contacts',  schedule => '30s');
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_associations', schedule => '30s');
+              "
               echo "pg_trickle setup complete. Sleeping."
               exec sleep infinity
           envFrom:

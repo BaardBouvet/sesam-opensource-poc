@@ -6,9 +6,10 @@
             "server": "localhost",
             "port": 5432,
             "driver": "PostgreSQL",
-            "name": "pg-trickle",
-            "username": "postgres",
-            "database": "postgres"
+            "name": "inandout",
+            "username": "inandout",
+            "database": "inandout",
+            "password": "changeme"
         }
     ]
 }
