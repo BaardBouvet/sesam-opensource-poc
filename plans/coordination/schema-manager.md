@@ -1314,17 +1314,59 @@ This runs before any other reconcile logic, so the schema-manager's own tables a
 
 ## Implementation Sequence
 
-1. **Create the `schema-manager/` Python package** with the reconciler, config reader, stub generator, osi-engine caller, SQL applier, component gate, and shadow mode controller.
-2. **Create the Dockerfile** (`docker/schema-manager.Dockerfile`) as described above.
-3. **Create `k8s/base/schema-manager.yaml`** Deployment manifest.
-4. **Add component_state polling** to the in-and-out engine (ingest and writeback commands). This is a code change in `vendor/in-and-out`.
-5. **Add shadow mode support to writeback** — branch on `desired = 'shadow'` to write `shadow_log` instead of calling APIs. Code change in `vendor/in-and-out`.
-6. **Disable dlt schema creation** in the ingest pipeline config. Change in `vendor/in-and-out`.
-7. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
-8. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
-9. **Update `skaffold.yaml`**: add schema-manager image build, remove Job delete hook.
-10. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
-11. **Test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode, and promotion.
+The flat list below is restructured into four phases, each ending with a testable milestone. This ensures every phase can be validated before moving on, and the riskiest work (new code with no existing-component changes) comes first.
+
+### Phase 1: Schema-manager core (test standalone against Postgres)
+
+Pure new code — no changes to existing components.
+
+1. **Create `schema-manager/` Python package** — reconciler, config reader, stub generator, osi-engine caller, SQL applier (`create_or_replace_stream_table()`), EXPLAIN validator.
+2. **Create `docker/schema-manager.Dockerfile`**.
+3. **Write integration test**: spin up Postgres + pg-trickle with testcontainers, feed `mapping.yaml` + `connectors/*.yaml`, verify stubs created → Alembic applied → stream tables created → `pgtrickle.quick_health` returns OK.
+
+**Milestone:** `schema-manager reconcile` works end-to-end against a bare Postgres. Runnable locally without K8s.
+
+### Phase 2: Component gating (test with docker compose)
+
+Touches `vendor/in-and-out` but does not require K8s.
+
+4. **Add `component_state` and `migration_state` table DDL** to schema-manager self-upgrade.
+5. **Add component_state polling + advisory lock barrier to ingest** (`vendor/in-and-out`). Health endpoint: `/ready` → 503 when stopped, 200 when running.
+6. **Add component_state polling + advisory lock barrier to writeback** (`vendor/in-and-out`). Same health endpoint pattern.
+
+**Milestone:** Run Postgres + schema-manager + ingest + writeback locally (docker compose). Verify: schema-manager sets `desired = 'stopped'` → components idle → DDL applied → `desired = 'running'` → components resume. Change `mapping.yaml` → watch loop triggers reconcile → components pause and resume.
+
+### Phase 3: Kubernetes integration
+
+Manifest plumbing — mechanically moving from Job-based to Deployment-based.
+
+7. **Create `k8s/base/schema-manager.yaml`** Deployment manifest.
+8. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
+9. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
+10. **Update `skaffold.yaml`**: add schema-manager image build + file sync, remove Job delete hook.
+11. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
+
+**Milestone:** `skaffold dev` brings up the full stack. Change `mapping.yaml` → file sync triggers inotify → schema-manager reconciles → components pause/resume. No manual migration step.
+
+### Phase 4: Shadow mode + polish
+
+Safety features and operational polish. Shadow mode is the highest-value item here.
+
+12. **Add shadow mode to writeback** — `shadow_log` table, `desired = 'shadow'` branch in writeback sync loop. Code change in `vendor/in-and-out`.
+13. **Add `/reconcile` and `/promote` HTTP endpoints** to schema-manager health server.
+14. **Add auto-promotion logic** — gated on `pgtrickle.quick_health`, `consecutive_errors`, and shadow log stability. Controlled by `auto_promote_after` config (default: manual only).
+15. **Disable dlt schema evolution** in ingest — set `schema_contract` to `freeze` so misconfigurations fail loudly.
+16. **Privilege separation**: create separate DB roles — `sesam_ddl` for schema-manager, `sesam_dml` for ingest/writeback.
+17. **End-to-end test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode entry, `shadow_log` population, promotion via `just promote`, and auto-promotion timer.
+
+**Milestone:** Full plan implemented. Deploy a config change → writeback enters shadow → review `shadow_log` → `just promote` → writeback goes live.
+
+### Why this order
+
+- **Phase 1** is pure new code with no changes to existing components — lowest risk, fastest feedback loop, can be done by one person.
+- **Phase 2** touches `vendor/in-and-out` but can be tested without K8s — docker compose is sufficient to verify the advisory lock protocol.
+- **Phase 3** is manifest plumbing. Low risk but annoying to debug if Phases 1–2 aren't solid.
+- **Phase 4** saves the most complex feature (shadow mode) for last, so the core path is already working and tested before adding the safety layer.
 
 ## Open Questions — Resolved
 
