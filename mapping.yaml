@@ -76,7 +76,7 @@ mappings:
     written_state:
       table: inout_dst_hubspot_contacts_lwstate
       cluster_id: cluster_id
-      written: data
+      written: _written
       written_at: _written_at
     derive_timestamps: true
     fields:
@@ -99,7 +99,7 @@ mappings:
     written_state:
       table: inout_dst_tripletex_contacts_lwstate
       cluster_id: cluster_id
-      written: data
+      written: _written
       written_at: _written_at
     derive_timestamps: true
     fields:
@@ -122,7 +122,7 @@ mappings:
     written_state:
       table: inout_dst_hubspot_companies_lwstate
       cluster_id: cluster_id
-      written: data
+      written: _written
       written_at: _written_at
     derive_timestamps: true
     fields:
@@ -142,7 +142,7 @@ mappings:
     written_state:
       table: inout_dst_tripletex_customers_lwstate
       cluster_id: cluster_id
-      written: data
+      written: _written
       written_at: _written_at
     derive_timestamps: true
     fields:
@@ -166,7 +166,7 @@ mappings:
     written_state:
       table: inout_dst_hubspot_associations_lwstate
       cluster_id: cluster_id
-      written: data
+      written: _written
       written_at: _written_at
     fields:
       - source_path: data.fromObjectId
