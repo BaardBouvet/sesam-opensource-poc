@@ -77,13 +77,21 @@ undeploy:
 psql:
     psql postgresql://inandout:${POSTGRES_PASSWORD:-changeme}@localhost:5432/inandout
 
-# Re-run the migrate job (delete + recreate with a timestamp suffix)
+# Wipe all data and re-run schema setup — no redeploy needed.
+# Drops the public schema, then bounces ingest so init containers recreate everything.
+[group('db')]
+empty-db:
+    kubectl -n {{NAMESPACE}} exec statefulset/postgres -- \
+        psql -U inandout -d inandout -c \
+        "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+    just migrate
+
+# Re-run schema setup: bounce ingest and pgtrickle-setup so they re-run their init containers
+# (osi-render → convert → db-upgrade on ingest; wait-for-sources → apply-pgtrickle on pgtrickle-setup)
 [group('db')]
 migrate:
-    kubectl -n {{NAMESPACE}} delete job sesam-migrate --ignore-not-found
-    kubectl -n {{NAMESPACE}} create job sesam-migrate-$(date +%s) \
-        --from=job/sesam-migrate 2>/dev/null || \
-        kubectl apply -k k8s/overlays/dev
+    kubectl -n {{NAMESPACE}} rollout restart deployment/inandout-ingest deployment/pgtrickle-setup
+    kubectl -n {{NAMESPACE}} rollout status  deployment/inandout-ingest
 
 # ── Observability ─────────────────────────────────────────────────────────────
 

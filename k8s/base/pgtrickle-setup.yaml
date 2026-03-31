@@ -1,0 +1,126 @@
+# pgtrickle-setup — renders the OSI mapping and applies pg_trickle stream tables.
+#
+# Cannot run as an init container on ingest because inout_src_* source tables
+# are created lazily by the ingest engine at runtime (not by Alembic).
+# This pod runs in parallel: init containers render the SQL, then the main
+# container polls until all source tables from mapping.yaml exist, applies
+# pgtrickle.sql once, and sleeps forever to avoid restart loops.
+#
+# Re-triggered automatically on `just migrate` (rollout restart of this deploy).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgtrickle-setup
+  namespace: sesam-poc
+  labels:
+    app: pgtrickle-setup
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgtrickle-setup
+  template:
+    metadata:
+      labels:
+        app: pgtrickle-setup
+    spec:
+      initContainers:
+        # 1. Wait for postgres to accept connections.
+        - name: wait-for-postgres
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -U inandout >/dev/null 2>&1; do
+                sleep 2
+              done
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+
+        # 2. Render mapping.yaml → matviews.sql
+        - name: osi-render
+          image: osi-mapping-engine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - osi-engine
+            - render
+            - --output
+            - /shared/matviews.sql
+            - --materialize
+            - /mapping/mapping.yaml
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            - name: mapping
+              mountPath: /mapping
+
+        # 3. Convert matviews.sql → pgtrickle.sql
+        - name: convert-matviews
+          image: osi-mapping-engine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /usr/local/bin/convert_matviews_to_pgtrickle.py
+            - /shared/matviews.sql
+            - -o
+            - /shared/pgtrickle.sql
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+
+      containers:
+        # 4. Wait for all inout_src_* source tables, then apply pg_trickle SQL.
+        - name: apply-pgtrickle-sql
+          image: postgres-pgtrickle:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Ensuring pg_trickle extension..."
+              psql "$INOUT_DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS pg_trickle CASCADE;"
+
+              echo "Waiting for all source tables to be created by the ingest engine..."
+              for table in \
+                inout_src_hubspot_contacts \
+                inout_src_hubspot_companies \
+                inout_src_hubspot_contacts_companies_associations \
+                inout_src_tripletex_contacts \
+                inout_src_tripletex_customers; do
+                until psql "$INOUT_DATABASE_URL" -tAc \
+                  "SELECT 1 FROM information_schema.tables WHERE table_name='${table}'" \
+                  | grep -q 1; do
+                  echo "  waiting for ${table}..."
+                  sleep 3
+                done
+                echo "  ${table} exists"
+              done
+
+              echo "Applying pg_trickle stream-table SQL..."
+              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -f /shared/pgtrickle.sql
+              echo "pg_trickle setup complete. Sleeping."
+              exec sleep infinity
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+      volumes:
+        - name: shared
+          emptyDir: {}
+        - name: mapping
+          configMap:
+            name: osi-mapping-config

@@ -21,7 +21,7 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       initContainers:
-        - name: wait-for-migrations
+        - name: wait-for-postgres
           image: postgres-pgtrickle:latest
           imagePullPolicy: IfNotPresent
           command:
@@ -31,17 +31,28 @@ spec:
               until pg_isready -h postgres -U inandout >/dev/null 2>&1; do
                 sleep 2
               done
-              until psql "$INOUT_DATABASE_URL" -tAc "SELECT 1 FROM alembic_version LIMIT 1" >/dev/null 2>&1; do
-                sleep 2
-              done
           envFrom:
             - secretRef:
                 name: sesam-credentials
+
+        # 2. Run Alembic migrations
+        - name: db-upgrade
+          image: inandout-engine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            ["inandout", "db", "upgrade", "--config", "/config/ingestion.yaml"]
+          envFrom:
+            - secretRef:
+                name: sesam-credentials
+          volumeMounts:
+            - name: config
+              mountPath: /config
       containers:
         - name: ingest
           image: inandout-engine:latest
           imagePullPolicy: IfNotPresent
-          command: ["inandout", "ingest", "run", "--config", "/config/ingestion.yaml"]
+          command:
+            ["inandout", "ingest", "run", "--config", "/config/ingestion.yaml"]
           ports:
             - name: health
               containerPort: 9090

@@ -8,10 +8,10 @@ resources:
   - secret.yaml
   - configmap.yaml
   - postgres.yaml
-  - migrate-job.yaml
   - ingest.yaml
   - writeback.yaml
   - simulator.yaml
+  - pgtrickle-setup.yaml
 
 # Generate ConfigMaps directly from source files.
 # Requires --load-restrictor=LoadRestrictionsNone (set in skaffold.yaml buildArgs)
