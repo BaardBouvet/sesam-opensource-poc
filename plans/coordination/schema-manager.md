@@ -40,13 +40,13 @@ The schema-manager communicates with ingest and writeback through a `component_s
 ```sql
 CREATE TABLE IF NOT EXISTS component_state (
     component   TEXT PRIMARY KEY,           -- 'ingest', 'writeback'
-    desired     TEXT NOT NULL DEFAULT 'stopped',  -- 'running' | 'stopped'
+    desired     TEXT NOT NULL DEFAULT 'stopped',  -- 'running' | 'stopped' | 'shadow'
     schema_version TEXT,                    -- hash of config that produced current schema
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
-Ingest and writeback poll this table on a short interval (e.g. 5 s). When `desired = 'stopped'`, the component pauses its main loop (stops polling APIs / stops processing sync queue). When `desired = 'running'`, it resumes. This is **not** a process kill — the component stays alive and healthy but idles.
+Ingest and writeback poll this table on a short interval (e.g. 5 s). When `desired = 'stopped'`, the component pauses its main loop (stops polling APIs / stops processing sync queue). When `desired = 'running'`, it resumes. When `desired = 'shadow'` (writeback only), it computes diffs but does not push to APIs. This is **not** a process kill — the component stays alive and healthy but idles or runs in dry-run mode.
 
 This approach works identically inside Kubernetes, in Docker Compose, or running processes locally — no platform API calls required.
 
@@ -245,12 +245,13 @@ startup
 ├─► Start components:
 │   ├── SET desired = 'running' for ingest
 │   ├── Wait for ingest health check to report ready
-│   ├── SET desired = 'running' for writeback
+│   ├── SET desired = 'shadow' or 'running' for writeback (per shadow_mode policy)
 │   └── (writeback starts after ingest, so initial data is flowing)
 │
 └─► Enter watch loop:
     ├── Periodic config hash check (detect mapping.yaml / connector changes)
     │   └── If changed → re-enter schema diff (stops components first)
+    ├── Shadow mode monitoring (check if promotion is pending or auto-promote timer expired)
     ├── Component health monitoring
     │   └── If a component crashes → log, optionally restart
     ├── schema-manager own health endpoint (/health, /ready on port 9080)
@@ -348,11 +349,13 @@ Same pattern as ingest:
 
 1. **Add component_state polling with advisory lock barrier.** Same pattern as ingest — see the [Multi-Replica Coordination](#multi-replica-coordination-advisory-lock-barrier) section. The writeback sync loop checks `desired`, acquires a shared advisory lock for each sync cycle, and pauses when stopped.
 
-2. **Remove the wait-for-migrations init container.** Same as ingest.
+2. **Add shadow mode support.** When `desired = 'shadow'`, writeback computes diffs normally but writes them to the `shadow_log` table instead of calling external APIs. It does **not** update `sync_state`, so the same diff is recomputed each cycle until promoted. See the [Shadow Mode](#shadow-mode-for-onboarding) section.
 
-3. **Health endpoint pause-awareness.** Same as ingest — `/ready` returns 503 when paused.
+3. **Remove the wait-for-migrations init container.** Same as ingest.
 
-4. **No schema management code.** Writeback already doesn't manage DDL, but it currently assumes views exist on startup. With the component_state gate, this assumption is guaranteed: if writeback is told to run, the views are ready.
+4. **Health endpoint pause-awareness.** `/ready` returns 503 when stopped, 200 when running or in shadow mode. Add a `/mode` endpoint that reports `running`, `shadow`, or `stopped` for observability.
+
+5. **No schema management code.** Writeback already doesn't manage DDL, but it currently assumes views exist on startup. With the component_state gate, this assumption is guaranteed: if writeback is told to run (or shadow), the views are ready.
 
 ## Changes to OSI-Mapping
 
@@ -378,6 +381,7 @@ For now, go with Option A. The schema-manager image is built FROM the in-and-out
 |----------------|---------------------|
 | `stopped` | Component pauses main loop. Health: `/health` → 200, `/ready` → 503 |
 | `running` | Component runs normally. Health: `/health` → 200, `/ready` → 200 |
+| `shadow` | Writeback only. Computes diffs, writes to `shadow_log`, does not call APIs or update `sync_state`. Health: `/health` → 200, `/ready` → 200 |
 
 ### Polling behaviour
 
@@ -549,7 +553,8 @@ schema-manager/
 │   ├── alembic_runner.py    # Call inandout db upgrade as subprocess
 │   ├── applier.py           # Apply generated SQL to Postgres
 │   ├── component_gate.py    # Manage component_state table + advisory lock barrier
-│   ├── health.py            # /health and /ready endpoints
+│   ├── shadow.py            # Shadow mode policy, promotion, shadow_log queries
+│   ├── health.py            # /health, /ready, /promote endpoints
 │   └── watcher.py           # Watch loop: periodic config hash check
 ```
 
@@ -582,10 +587,13 @@ Steps 5-6 can happen concurrently — ingest and writeback are idling while the 
 6. Schema-manager drops and recreates generated views + streams
 7. Schema-manager releases exclusive advisory lock(s)
 8. Schema-manager waits for stream tables to rebuild
-9. Schema-manager sets desired = 'running' for affected components
+9. Schema-manager sets desired = 'running' for ingest
+10. Schema-manager sets desired = 'shadow' or 'running' for writeback (per shadow_mode policy)
 ```
 
 If only mapping.yaml changed (no new sources), this is a tier 1 change: ingest can keep running during steps 4-8 — it writes to staging tables that are unaffected by view recreation. Only writeback must be stopped to prevent it from reading partially-rebuilt views.
+
+When `shadow_mode.on_change` is `always`, writeback enters shadow mode after every config change. The operator reviews `shadow_log` and runs `schema-manager promote` to go live. When the policy is `never`, writeback goes straight to `running`.
 
 ## Change Classification
 
@@ -637,7 +645,7 @@ Mitigations:
 
 3. **Git is the source of truth.** Since `mapping.yaml` is version-controlled, a `git revert` followed by redeployment is always an option. The schema-manager will detect the hash change and re-apply. Combined with the checksum gate, this is fast.
 
-4. **Extended shadow mode for onboarding.** New mapping configurations will be validated through an extended shadow mode before writeback is enabled against production APIs. This is handled outside the schema-manager and documented separately.
+4. **Extended shadow mode for onboarding.** New mapping configurations are validated through shadow mode before writeback pushes to production APIs. See the [Shadow Mode](#shadow-mode-for-onboarding) section. This is integrated into the schema-manager: after a config change, writeback enters shadow mode automatically (per policy), computes diffs without calling APIs, and logs them in `shadow_log` for operator review. Only after explicit promotion does writeback go live.
 
 ## Database Users and Privilege Separation
 
@@ -647,7 +655,7 @@ The plan designates the schema-manager as the only DDL writer, but all component
 |------|---------|------------|
 | `sesam_admin` | schema-manager | `CREATE`, `ALTER`, `DROP` on all schemas. Full DDL. Owns all tables and views. |
 | `sesam_ingest` | ingest replicas | `INSERT`, `UPDATE` on `inout_src_*` staging tables. `SELECT` on `component_state`. No DDL. |
-| `sesam_writeback` | writeback replicas | `SELECT` on generated views, `SELECT`/`INSERT`/`UPDATE` on `sync_state`, `sync_task`, `cross_system_link`. `SELECT` on `component_state`. No DDL. |
+| `sesam_writeback` | writeback replicas | `SELECT` on generated views, `SELECT`/`INSERT`/`UPDATE` on `sync_state`, `sync_task`, `cross_system_link`, `shadow_log`. `SELECT` on `component_state`. No DDL. |
 
 This prevents a bug in ingest from accidentally altering tables, and makes the single-owner guarantee enforceable at the database level rather than by convention alone.
 
@@ -656,6 +664,142 @@ Implementation:
 - The `sesam-credentials` Secret gains additional DSN entries (`INGEST_DATABASE_URL`, `WRITEBACK_DATABASE_URL`) with the restricted users
 - The `inandout-config` ConfigMap references the appropriate DSN per component
 - Advisory locks work across users — a shared lock acquired by `sesam_ingest` is visible to `sesam_admin`'s exclusive lock request
+
+## Shadow Mode for Onboarding
+
+When a new mapping configuration is deployed, writeback enters **shadow mode** before going live. In shadow mode, writeback computes what it would push to external APIs but writes the diffs to a log table for operator review instead. No data leaves the system until an operator explicitly promotes the config.
+
+### Shadow log table
+
+```sql
+CREATE TABLE IF NOT EXISTS shadow_log (
+    id              BIGSERIAL PRIMARY KEY,
+    cycle_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    schema_version  TEXT NOT NULL,
+    target_system   TEXT NOT NULL,         -- 'hubspot', 'tripletex'
+    entity_type     TEXT NOT NULL,         -- 'person', 'company'
+    operation       TEXT NOT NULL,         -- 'create', 'update', 'delete'
+    record_id       TEXT,                  -- golden_id or external_id
+    diff            JSONB NOT NULL,        -- full payload that would be sent
+    suppressed      BOOLEAN DEFAULT FALSE  -- operator can mark false positives
+);
+```
+
+This table is created by the schema-manager as part of its DDL step and owned by `sesam_admin`. The `sesam_writeback` user has `INSERT` and `SELECT` privileges.
+
+### Writeback behaviour in shadow mode
+
+```python
+state = db.execute(
+    "SELECT desired FROM component_state WHERE component = 'writeback'"
+).scalar()
+
+if state == 'stopped':
+    time.sleep(5)
+    continue
+
+# Both 'running' and 'shadow' acquire the lock and compute diffs
+db.execute("SELECT pg_advisory_lock_shared(%s)", [WRITEBACK_LOCK_KEY])
+try:
+    diffs = compute_sync_diffs()
+
+    if state == 'shadow':
+        write_to_shadow_log(diffs, schema_version)
+        # Do NOT call APIs, do NOT update sync_state
+    elif state == 'running':
+        execute_sync(diffs)       # call APIs
+        update_sync_state(diffs)  # record what was written
+finally:
+    db.execute("SELECT pg_advisory_unlock_shared(%s)", [WRITEBACK_LOCK_KEY])
+```
+
+Because `sync_state` is not updated in shadow mode, the same diff is recomputed on each cycle. This is intentional — it ensures the shadow log reflects the current state of the world, not a stale snapshot.
+
+### Reviewing the shadow log
+
+Operators query the shadow log to validate the new config before promoting:
+
+```sql
+-- Summary: how many changes would this config push?
+SELECT target_system, operation, count(*)
+FROM shadow_log
+WHERE schema_version = 'sha256:abc123...'
+GROUP BY target_system, operation;
+
+-- Show all deletes (the most dangerous operations)
+SELECT * FROM shadow_log
+WHERE operation = 'delete' AND schema_version = 'sha256:abc123...';
+
+-- Mark false positives
+UPDATE shadow_log SET suppressed = TRUE WHERE id IN (...);
+```
+
+### Onboarding flow
+
+```
+1. Developer deploys new or modified mapping.yaml
+
+2. Schema-manager detects config change
+   ├── Pauses writeback, applies DDL
+   ├── Starts ingest with desired = 'running'
+   └── Starts writeback with desired = 'shadow'   ← per shadow_mode policy
+
+3. Writeback runs in shadow mode
+   ├── Computes diffs each cycle
+   ├── Writes to shadow_log
+   └── Does NOT call APIs or update sync_state
+
+4. Operator reviews shadow_log
+   ├── Checks for unexpected deletes / excessive change volume
+   ├── Validates field values look correct
+   └── Decides: promote or rollback?
+
+5a. Promote → operator runs: schema-manager promote
+    ├── Schema-manager sets writeback desired = 'running'
+    ├── Writeback starts pushing to APIs normally
+    └── shadow_log preserved for audit (or truncated)
+
+5b. Rollback → operator reverts mapping.yaml, redeploys
+    ├── Schema-manager detects hash change, re-applies old schema
+    ├── shadow_log shows what would have happened (post-mortem)
+    └── No data was pushed — production APIs are untouched
+```
+
+### Promotion
+
+The schema-manager exposes a `/promote` endpoint and CLI command:
+
+```bash
+# Via HTTP
+curl -X POST http://schema-manager:9080/promote
+
+# Via CLI (local dev)
+schema-manager promote --database "$INOUT_DATABASE_URL"
+
+# Via justfile
+just promote
+```
+
+Promotion sets `desired = 'running'` for writeback only if it is currently in `shadow` state. If writeback is already running or stopped, the command is a no-op and logs a warning.
+
+### Shadow mode policy
+
+The schema-manager config determines when shadow mode is used:
+
+```yaml
+# schema-manager config
+shadow_mode:
+  on_change: always          # 'always' | 'new_targets_only' | 'never'
+  auto_promote_after: null   # optional: auto-promote after duration (e.g. '24h')
+```
+
+| Policy | Behaviour |
+|--------|-----------|
+| `always` | Every config change puts writeback into shadow. Promotion always manual. Recommended for onboarding and production. |
+| `new_targets_only` | Shadow for tier 2/3 changes (new sources/targets). Tier 1 changes (field/strategy on existing targets) go straight to live. For mature deployments. |
+| `never` | Writeback always goes straight to live. For development and testing only. |
+
+If `auto_promote_after` is set, the schema-manager's watch loop checks whether the shadow period has elapsed and no anomalies were detected (e.g., delete count below threshold, change volume within historical norms). If conditions are met, it promotes automatically. This is a future enhancement — manual promotion is the default.
 
 ## What Gets Deleted
 
@@ -670,18 +814,20 @@ Implementation:
 
 ## Implementation Sequence
 
-1. **Create the `schema-manager/` Python package** with the reconciler, config reader, stub generator, osi-engine caller, SQL applier, and component gate.
+1. **Create the `schema-manager/` Python package** with the reconciler, config reader, stub generator, osi-engine caller, SQL applier, component gate, and shadow mode controller.
 2. **Create the Dockerfile** (`docker/schema-manager.Dockerfile`) as described above.
 3. **Create `k8s/base/schema-manager.yaml`** Deployment manifest.
 4. **Add component_state polling** to the in-and-out engine (ingest and writeback commands). This is a code change in `vendor/in-and-out`.
-5. **Disable dlt schema creation** in the ingest pipeline config. Change in `vendor/in-and-out`.
-6. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
-7. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
-8. **Update `skaffold.yaml`**: add schema-manager image build, remove Job delete hook.
-9. **Update `justfile`**: replace Job-based migrate recipe.
-10. **Test**: deploy to kind cluster, verify startup ordering and config-change flow.
+5. **Add shadow mode support to writeback** — branch on `desired = 'shadow'` to write `shadow_log` instead of calling APIs. Code change in `vendor/in-and-out`.
+6. **Disable dlt schema creation** in the ingest pipeline config. Change in `vendor/in-and-out`.
+7. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
+8. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
+9. **Update `skaffold.yaml`**: add schema-manager image build, remove Job delete hook.
+10. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
+11. **Test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode, and promotion.
 
 ## Open Questions
 
 - Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on the periodic watch loop?
 - How should we detect that pg-trickle stream tables are "fully populated" after recreation? Row count comparison, a watermark table, or a fixed delay?
+- Should auto-promotion be supported (promote after N hours with no anomalies), or should promotion always be manual?
