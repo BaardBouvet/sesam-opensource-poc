@@ -1332,7 +1332,8 @@ Touches `vendor/in-and-out` but does not require K8s.
 
 4. **Add `component_state` and `migration_state` table DDL** to schema-manager self-upgrade.
 5. **Add component_state polling + advisory lock barrier to ingest** (`vendor/in-and-out`). Health endpoint: `/ready` → 503 when stopped, 200 when running.
-6. **Add component_state polling + advisory lock barrier to writeback** (`vendor/in-and-out`). Same health endpoint pattern.
+6. **Add component_state polling + advisory lock barrier to writeback** (`vendor/in-and-out`). Same health endpoint pattern. Add `/mode` endpoint reporting `running`/`shadow`/`stopped`.
+7. **Remove Alembic dependency from ingest and writeback images** — strip `inandout db upgrade` command and Alembic packages from their Dockerfiles. Alembic now runs only inside the schema-manager.
 
 **Milestone:** Run Postgres + schema-manager + ingest + writeback locally (docker compose). Verify: schema-manager sets `desired = 'stopped'` → components idle → DDL applied → `desired = 'running'` → components resume. Change `mapping.yaml` → watch loop triggers reconcile → components pause and resume.
 
@@ -1340,11 +1341,11 @@ Touches `vendor/in-and-out` but does not require K8s.
 
 Manifest plumbing — mechanically moving from Job-based to Deployment-based.
 
-7. **Create `k8s/base/schema-manager.yaml`** Deployment manifest.
-8. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
-9. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
-10. **Update `skaffold.yaml`**: add schema-manager image build + file sync, remove Job delete hook.
-11. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
+8. **Create `k8s/base/schema-manager.yaml`** Deployment manifest.
+9. **Remove `wait-for-migrations` init containers** from `ingest.yaml` and `writeback.yaml`.
+10. **Delete `migrate-job.yaml`** and update `kustomization.yaml`.
+11. **Update `skaffold.yaml`**: add schema-manager image build + file sync, remove Job delete hook.
+12. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
 
 **Milestone:** `skaffold dev` brings up the full stack. Change `mapping.yaml` → file sync triggers inotify → schema-manager reconciles → components pause/resume. No manual migration step.
 
@@ -1352,12 +1353,12 @@ Manifest plumbing — mechanically moving from Job-based to Deployment-based.
 
 Safety features and operational polish. Shadow mode is the highest-value item here.
 
-12. **Add shadow mode to writeback** — `shadow_log` table, `desired = 'shadow'` branch in writeback sync loop. Code change in `vendor/in-and-out`.
-13. **Add `/reconcile` and `/promote` HTTP endpoints** to schema-manager health server.
-14. **Add auto-promotion logic** — gated on `pgtrickle.quick_health`, `consecutive_errors`, and shadow log stability. Controlled by `auto_promote_after` config (default: manual only).
-15. **Disable dlt schema evolution** in ingest — set `schema_contract` to `freeze` so misconfigurations fail loudly.
-16. **Privilege separation**: create separate DB roles — `sesam_ddl` for schema-manager, `sesam_dml` for ingest/writeback.
-17. **End-to-end test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode entry, `shadow_log` population, promotion via `just promote`, and auto-promotion timer.
+13. **Add shadow mode to writeback** — `shadow_log` table, `desired = 'shadow'` branch in writeback sync loop. Code change in `vendor/in-and-out`.
+14. **Add `/reconcile` and `/promote` HTTP endpoints** to schema-manager health server.
+15. **Add auto-promotion logic** — gated on `pgtrickle.quick_health`, `consecutive_errors`, and shadow log stability. Controlled by `auto_promote_after` config (default: manual only).
+16. **Disable dlt schema evolution** in ingest — set `schema_contract` to `freeze` so misconfigurations fail loudly.
+17. **Privilege separation**: create separate DB roles — `sesam_ddl` for schema-manager, `sesam_dml` for ingest/writeback.
+18. **End-to-end test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode entry, `shadow_log` population, promotion via `just promote`, and auto-promotion timer.
 
 **Milestone:** Full plan implemented. Deploy a config change → writeback enters shadow → review `shadow_log` → `just promote` → writeback goes live.
 
