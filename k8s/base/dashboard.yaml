@@ -38,7 +38,7 @@ spec:
             - sh
             - -c
             - |
-              until curl -sf http://inandout-schema-manager:9080/ready >/dev/null 2>&1; do
+              until curl -sf http://schema-manager:9080/ready >/dev/null 2>&1; do
                 sleep 3
               done
       containers:
