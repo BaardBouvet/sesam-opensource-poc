@@ -234,12 +234,13 @@ startup
 │   ├── Apply DDL in dependency order:
 │   │   1. Create/update staging table stubs (from sources: in mapping.yaml)
 │   │   2. Run Alembic upgrade (operational tables)
-│   │   3. Drop existing generated views and stream tables
-│   │   4. Call osi-engine render → SQL
-│   │   5. Convert to pg-trickle stream SQL
-│   │   6. Apply generated SQL in a transaction
+│   │   3. Call osi-engine render → SQL
+│   │   4. Convert to pg-trickle stream SQL
+│   │   5. EXPLAIN-validate generated SQL against current DB
+│   │   6. Apply via pgtrickle.create_or_replace_stream_table() per ST
+│   │   7. Drop orphaned stream tables (removed from config)
 │   ├── Release exclusive advisory lock
-│   ├── Wait for stream tables to be populated (row count > 0 or watermark)
+│   ├── Wait for stream tables to be populated (pgtrickle.quick_health status = OK, stale_tables = 0)
 │   └── Update schema_version in component_state
 │
 ├─► Start components:
@@ -278,16 +279,28 @@ Step 2: Operational tables (Alembic)
         └── sync_task
 
 Step 3: Generated views + stream tables
-        ├── DROP all objects in the generated layer
         ├── Run osi-engine render mapping.yaml → matviews.sql
         ├── Run convert_matviews_to_pgtrickle.py → pgtrickle.sql
-        ├── Validate generated SQL against actual DB (EXPLAIN each view)  ← NEW
-        └── Apply pgtrickle.sql (creates stream tables + views)
+        ├── Validate generated SQL against actual DB (EXPLAIN each view)  ← safety net
+        ├── Apply via pgtrickle.create_or_replace_stream_table() per stream table
+        │   ├── Unchanged query: no-op (OID preserved, no refresh)
+        │   ├── Compatible change (ADD/DROP column): ALTER TABLE + full refresh (OID preserved)
+        │   └── Incompatible change (type change): storage rebuild + full refresh (OID changes)
+        └── Drop any stream tables that exist in DB but not in generated SQL
 
 Step 3 depends on Steps 1 and 2 because the generated views join
 staging tables and entity_cluster_member. The validation step catches
 any mismatch between the Alembic-managed operational schema and the
 generated view SQL before any DDL is applied.
+
+**Key insight: `create_or_replace_stream_table()` is idempotent.** It
+compares the post-rewrite (normalized) SQL, so cosmetic differences are
+ignored. For most mapping changes (adding a field, changing a strategy),
+the schema change is compatible — pg-trickle migrates in place and
+preserves the storage table OID, meaning downstream views and publications
+remain valid. Only fundamental restructures (column type changes) trigger
+a full rebuild. This eliminates the DROP+recreate window for the common
+case and drastically reduces rebuild time.
 ```
 
 ## Cross-Component Schema Contract Validation
@@ -334,11 +347,11 @@ The validation step runs between Alembic and the DROP:
 2. Run Alembic upgrade
 3. Generate SQL: osi-engine render → convert → matviews.sql
 4. EXPLAIN-validate matviews.sql against current DB   ← catches mismatches here
-5. DROP existing generated views and stream tables
-6. Apply validated pgtrickle.sql
+5. Apply via pgtrickle.create_or_replace_stream_table() per stream table
+6. Drop orphaned stream tables (exist in DB but not in generated SQL)
 ```
 
-Running validation before the DROP means the old views are never removed if the new ones are invalid — no downtime window from a bad migration.
+Running validation before apply means invalid SQL never reaches pg-trickle — no downtime window from a bad migration. And `create_or_replace_stream_table()` is itself transactional — if any step fails, the stream table is left unchanged.
 
 ### CI enforcement
 
@@ -775,7 +788,7 @@ Steps 5-6 can happen concurrently — ingest and writeback are idling while the 
 3. Schema-manager's watch loop detects config hash change
 4. Schema-manager sets desired = 'stopped' for writeback (and ingest if tier 2/3)
 5. Schema-manager acquires exclusive advisory lock(s) for affected components
-6. Schema-manager drops and recreates generated views + streams
+6. Schema-manager applies generated views + streams via create_or_replace_stream_table()
 7. Schema-manager releases exclusive advisory lock(s)
 8. Schema-manager waits for stream tables to rebuild
 9. Schema-manager sets desired = 'running' for ingest
@@ -1108,9 +1121,9 @@ Kubernetes sends `SIGTERM` and waits `terminationGracePeriodSeconds` (default 30
 
 ## Long Stream Rebuilds
 
-After dropping and recreating generated views and stream tables, pg-trickle must rebuild the stream tables from scratch. On large datasets this can take minutes or hours. During this time, the plan currently keeps both ingest and writeback paused.
+With `create_or_replace_stream_table()`, most config changes (adding a field, changing a merge strategy) result in compatible schema changes — pg-trickle migrates in place with a single full refresh, preserving the storage table OID. Only incompatible changes (column type changes, fundamental restructures) require a full rebuild from scratch.
 
-For the PoC, this is acceptable — datasets are small. For production, two mitigations:
+When a full rebuild is needed (incompatible change or first deploy), it can take minutes or hours on large datasets. During this time, the plan keeps writeback paused but can release ingest early.
 
 ### Allow ingest to resume during stream rebuilds
 
@@ -1122,13 +1135,43 @@ This reduces the disruption window for ingest from "full rebuild time" to "DDL a
 
 ### Stream readiness detection
 
-The schema-manager needs to know when stream tables are "ready enough" for writeback to resume. Options:
+The schema-manager needs to know when stream tables are "ready enough" for writeback to resume.
 
-1. **Row count comparison**: compare stream table row count to source staging table count. When they converge (within a threshold), streams are ready. Simple but imprecise for tables with deletes.
-2. **pg-trickle watermark**: if pg-trickle exposes an LSN or progress indicator, the schema-manager can wait for it to reach the current WAL position.
-3. **Timeout with verification**: wait a configurable duration (e.g. 60s for PoC), then spot-check a sample of golden records against expected values.
+**pg-trickle exposes exactly what we need.** After reviewing the pg-trickle source (v0.12.0+), three complementary mechanisms are available:
 
-For the PoC, option 3 (timeout) is simplest. Option 2 is preferred long-term if pg-trickle supports it.
+1. **`pgtrickle.quick_health` view** — single-row dashboard with `status` (`OK`/`WARNING`/`CRITICAL`), `stale_tables` count, and `error_tables` count. The schema-manager polls this after DDL until `status = 'OK'` and `stale_tables = 0`.
+
+2. **`pgtrickle.pg_stat_stream_tables` view** — per-stream-table `is_populated`, `status`, and `stale` flag. The schema-manager queries `WHERE stale = true OR status != 'ACTIVE'` and waits for an empty result set.
+
+3. **`pgtrickle.watermark_status()` function** — if we use watermark groups (see below), this returns per-group `aligned` boolean and `lag_secs`. The schema-manager can gate writeback resumption on all groups being aligned.
+
+**Decision: use `quick_health` + `pg_stat_stream_tables` as the primary readiness gate.**
+
+```python
+# schema-manager: poll for stream readiness after DDL
+async def wait_for_streams_ready(conn, timeout_secs: int) -> bool:
+    deadline = time.monotonic() + timeout_secs
+    while time.monotonic() < deadline:
+        row = await conn.fetchrow(
+            "SELECT status, stale_tables, error_tables "
+            "FROM pgtrickle.quick_health"
+        )
+        if row["status"] == "OK" and row["stale_tables"] == 0:
+            return True
+        if row["error_tables"] > 0:
+            # Log details from pgtrickle.health_check() for diagnostics
+            errors = await conn.fetch(
+                "SELECT check_name, detail FROM pgtrickle.health_check() "
+                "WHERE severity = 'ERROR'"
+            )
+            log.warning("Stream errors during rebuild", errors=errors)
+        await asyncio.sleep(5)
+    return False  # timed out — operator must investigate
+```
+
+This replaces the earlier "timeout with verification" fallback. The `stream_ready_timeout` config still applies as a safety bound, but the primary signal is pg-trickle's own readiness reporting, not a blind timer.
+
+**Bonus: watermark gating for ingest coordination.** When the schema-manager advances ingest data into staging tables, it can call `pgtrickle.advance_watermark()` per source, and create watermark groups so downstream stream tables don't refresh until all related sources are aligned. This eliminates the split-version read problem at the stream layer too.
 
 ## Schema-Manager Configuration
 
@@ -1283,8 +1326,68 @@ This runs before any other reconcile logic, so the schema-manager's own tables a
 10. **Update `justfile`**: replace Job-based migrate recipe, add `just promote` recipe.
 11. **Test**: deploy to kind cluster, verify startup ordering, config-change flow, shadow mode, and promotion.
 
-## Open Questions
+## Open Questions — Resolved
 
-- Should the schema-manager expose a `/reconcile` HTTP endpoint for on-demand triggers, or rely purely on inotify + periodic fallback?
-- Does pg-trickle expose an LSN or progress indicator for stream table readiness? If not, which fallback (row count comparison, timeout, or spot-check) should be the default?
-- Should auto-promotion be supported (promote after N hours with no anomalies), or should promotion always be manual?
+All three open questions have been resolved after reviewing the pg-trickle source code (v0.12.0+).
+
+### 1. `/reconcile` HTTP endpoint — Yes, keep it
+
+**Decision:** Expose `/reconcile` (and `/reconcile?dry_run=true`) on the health server.
+
+**Rationale:** inotify + periodic fallback covers the automatic path, but operators need an imperative trigger for:
+- CI/CD pipelines that deploy a ConfigMap and want to wait for convergence
+- Manual intervention after fixing a broken config
+- Dry-run previews before applying changes
+
+The endpoint is trivial (just enqueues a reconcile on the existing loop) and complements the automatic path — it doesn't replace it.
+
+### 2. Stream readiness indicator — Fully supported by pg-trickle
+
+**Decision:** Use `pgtrickle.quick_health` + `pgtrickle.pg_stat_stream_tables` as the primary readiness gate (see "Stream readiness detection" section above).
+
+**Rationale:** pg-trickle provides:
+- `quick_health.status = 'OK'` with `stale_tables = 0` as the aggregate readiness signal
+- Per-stream-table `is_populated`, `stale`, and `staleness` via `pg_stat_stream_tables`
+- `pgtrickle.get_staleness(name)` for spot-checking individual stream tables
+- `watermark_status()` for cross-source alignment if we use watermark groups
+
+This is strictly better than the timeout/row-count fallbacks we considered. The `stream_ready_timeout` config remains as a safety bound.
+
+### 3. Auto-promotion after soak period — Support it, default off
+
+**Decision:** Implement auto-promotion with `auto_promote_after: <duration>` in `schema-manager.yaml`, defaulting to `null` (manual promotion only).
+
+**Rationale:** pg-trickle's monitoring views give us everything needed to evaluate soak health automatically:
+- `pgtrickle.health_check()` with severity levels — auto-promotion aborts if any `ERROR` checks fire during soak
+- `pgtrickle.st_refresh_stats()` with `consecutive_errors` and `failed_refreshes` — promotion requires zero errors during the soak window
+- `pgtrickle.change_buffer_sizes()` with `pending_rows` — promotion requires buffers to be draining (not growing unboundedly)
+- Shadow mode's own `shadow_log` — writeback diff counts should stabilize (not diverge)
+
+```python
+# Auto-promotion evaluation (runs on each reconcile tick while in shadow mode)
+def should_auto_promote(shadow_start: datetime, config: ShadowConfig, conn) -> bool:
+    if config.auto_promote_after is None:
+        return False
+    if datetime.now(UTC) - shadow_start < config.auto_promote_after:
+        return False  # soak period not elapsed
+
+    # Gate 1: pg-trickle healthy
+    health = conn.fetchrow("SELECT status FROM pgtrickle.quick_health")
+    if health["status"] != "OK":
+        return False
+
+    # Gate 2: no stream table errors during soak
+    errors = conn.fetchval(
+        "SELECT count(*) FROM pgtrickle.pg_stat_stream_tables "
+        "WHERE consecutive_errors > 0"
+    )
+    if errors > 0:
+        return False
+
+    # Gate 3: shadow log diffs stabilized (not growing)
+    # ... application-specific check on shadow_log table ...
+
+    return True
+```
+
+Default is `null` (manual only) because auto-promotion is a trust decision — teams should opt in after gaining confidence in the shadow monitoring.
