@@ -101,37 +101,19 @@ spec:
                 echo "  ${table} exists"
               done
 
-              echo "Enabling REPLICA IDENTITY FULL for CDC on source tables..."
-              psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-                ALTER TABLE inout_src_hubspot_companies                     REPLICA IDENTITY FULL;
-                ALTER TABLE inout_src_hubspot_contacts                      REPLICA IDENTITY FULL;
-                ALTER TABLE inout_src_hubspot_contacts_companies_associations REPLICA IDENTITY FULL;
-                ALTER TABLE inout_src_tripletex_contacts                    REPLICA IDENTITY FULL;
-                ALTER TABLE inout_src_tripletex_customers                   REPLICA IDENTITY FULL;
-              "
-
               echo "Applying pg_trickle stream-table SQL..."
               psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -f /shared/pgtrickle.sql
 
-              echo "Setting refresh schedules and FULL refresh mode on leaf delta stream tables..."
+              echo "Setting 1-second refresh schedule on leaf delta stream tables..."
               psql "$INOUT_DATABASE_URL" -v ON_ERROR_STOP=1 -c "
-                SELECT pgtrickle.alter_stream_table('_delta_hubspot_companies',    schedule => '30s', refresh_mode => 'FULL');
-                SELECT pgtrickle.alter_stream_table('_delta_tripletex_customers',  schedule => '30s', refresh_mode => 'FULL');
-                SELECT pgtrickle.alter_stream_table('_delta_hubspot_contacts',     schedule => '30s', refresh_mode => 'FULL');
-                SELECT pgtrickle.alter_stream_table('_delta_tripletex_contacts',   schedule => '30s', refresh_mode => 'FULL');
-                SELECT pgtrickle.alter_stream_table('_delta_hubspot_associations', schedule => '30s', refresh_mode => 'FULL');
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_companies',    schedule => '1s');
+                SELECT pgtrickle.alter_stream_table('_delta_tripletex_customers',  schedule => '1s');
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_contacts',     schedule => '1s');
+                SELECT pgtrickle.alter_stream_table('_delta_tripletex_contacts',   schedule => '1s');
+                SELECT pgtrickle.alter_stream_table('_delta_hubspot_associations', schedule => '1s');
               "
-              echo "pg_trickle setup complete. Periodically refreshing delta tables every 30s."
-              while true; do
-                sleep 30
-                psql "$INOUT_DATABASE_URL" -c "
-                  SELECT pgtrickle.refresh_stream_table('_delta_hubspot_companies');
-                  SELECT pgtrickle.refresh_stream_table('_delta_tripletex_customers');
-                  SELECT pgtrickle.refresh_stream_table('_delta_hubspot_contacts');
-                  SELECT pgtrickle.refresh_stream_table('_delta_tripletex_contacts');
-                  SELECT pgtrickle.refresh_stream_table('_delta_hubspot_associations');
-                " 2>&1 | grep -v "^$"
-              done
+              echo "pg_trickle setup complete."
+              exec sleep infinity
           envFrom:
             - secretRef:
                 name: sesam-credentials
