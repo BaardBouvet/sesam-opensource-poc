@@ -114,8 +114,8 @@ connector:
             cursor:
               request_param: after
               response_path: "paging.next.after"
-              page_size: 100        # HubSpot max; omit to use API default of 10
-              page_size_param: limit  # HubSpot uses ?limit=N
+              page_size: 100 # HubSpot max; omit to use API default of 10
+              page_size_param: limit # HubSpot uses ?limit=N
             termination:
               - empty_page
           incremental:
@@ -148,10 +148,7 @@ connector:
             path: /crm/v3/objects/contacts/${external_id}
 
       simulator:
-        # Single template record; seed_count tells the simulator to generate 5 records from it.
-        # Set INOUT_HUBSPOT_BASE_URL=http://simulator:6100/hubspot to point
-        # the engine at the local simulator instead of the real HubSpot API.
-        seed_count: 5
+        seed_count: 0
         seed_data:
           - id: "1001"
             createdAt: "2026-03-20T10:00:00.000Z"
@@ -186,8 +183,8 @@ connector:
             cursor:
               request_param: after
               response_path: "paging.next.after"
-              page_size: 100        # HubSpot max; omit to use API default of 10
-              page_size_param: limit  # HubSpot uses ?limit=N
+              page_size: 100 # HubSpot max; omit to use API default of 10
+              page_size_param: limit # HubSpot uses ?limit=N
             termination:
               - empty_page
           incremental:
@@ -220,7 +217,7 @@ connector:
             path: /crm/v3/objects/companies/${external_id}
 
       simulator:
-        seed_count: 3
+        seed_count: 1
         seed_data:
           - id: "2001"
             createdAt: "2026-03-18T09:00:00.000Z"
@@ -257,13 +254,13 @@ connector:
             cursor:
               request_param: after
               response_path: "paging.next.after"
-              page_size: 100        # HubSpot max; omit to use API default of 10
-              page_size_param: limit  # HubSpot uses ?limit=N
+              page_size: 100 # HubSpot max; omit to use API default of 10
+              page_size_param: limit # HubSpot uses ?limit=N
             termination:
               - empty_page
 
       simulator:
-        seed_count: 3
+        seed_count: 0
         seed_data:
           - fromObjectId: "1001"
             toObjectId: "2001"

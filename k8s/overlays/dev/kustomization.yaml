@@ -31,9 +31,9 @@ patches:
         path: /spec/template/spec/containers/0/env
         value:
           - name: INOUT_HUBSPOT_BASE_URL
-            value: "http://inandout-simulator:6100/hubspot"
+            value: "http://inandout-simulator:6100/connectors/hubspot"
           - name: INOUT_TRIPLETEX_BASE_URL
-            value: "http://inandout-simulator:6100/tripletex"
+            value: "http://inandout-simulator:6100/connectors/tripletex"
     target:
       kind: Deployment
       name: inandout-ingest
@@ -43,9 +43,9 @@ patches:
         path: /spec/template/spec/containers/0/env
         value:
           - name: INOUT_HUBSPOT_BASE_URL
-            value: "http://inandout-simulator:6100/hubspot"
+            value: "http://inandout-simulator:6100/connectors/hubspot"
           - name: INOUT_TRIPLETEX_BASE_URL
-            value: "http://inandout-simulator:6100/tripletex"
+            value: "http://inandout-simulator:6100/connectors/tripletex"
     target:
       kind: Deployment
       name: inandout-writeback

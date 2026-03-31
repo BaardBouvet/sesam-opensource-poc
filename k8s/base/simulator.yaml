@@ -30,6 +30,12 @@ spec:
             - /connectors/tripletex.yaml
             - --engine-url
             - http://inandout-ingest:9090
+          env:
+            - name: INOUT_SIMULATOR_STORE
+              valueFrom:
+                secretKeyRef:
+                  name: sesam-credentials
+                  key: INOUT_DATABASE_URL
           ports:
             - name: http
               containerPort: 6100
@@ -42,7 +48,7 @@ spec:
               cpu: "250m"
           readinessProbe:
             httpGet:
-              path: /hubspot/crm/v3/objects/contacts
+              path: /health
               port: 6100
             initialDelaySeconds: 5
             periodSeconds: 10
