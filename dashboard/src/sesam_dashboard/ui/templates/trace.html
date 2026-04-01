@@ -7,9 +7,15 @@
 <p class="text-sm text-slate-400 mb-6">Follow a single entity end-to-end through the pipeline — from source record to
     golden record.</p>
 
-<form method="get" action="/ui/trace" class="flex gap-3 mb-8">
-    <input type="text" name="q" value="{{ query }}" placeholder="record_id or entity_id…"
-        class="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500" />
+<form method="get" action="/ui/trace" class="flex gap-3 mb-4" id="trace-form">
+    <div class="relative flex-1">
+        <input type="text" name="q" id="trace-input" value="{{ query }}" placeholder="Search by name or ID…"
+            autocomplete="off"
+            class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500" />
+        <ul id="trace-suggestions"
+            class="hidden absolute z-10 mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg shadow-lg max-h-72 overflow-y-auto text-sm">
+        </ul>
+    </div>
     <button type="submit"
         class="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-600 text-white text-sm font-semibold transition-colors">
         Trace
@@ -21,8 +27,91 @@
     Entity tracing is not yet implemented. Query: <code class="font-mono">{{ query }}</code>
 </div>
 {% else %}
-<div class="bg-slate-900 rounded-xl border border-slate-700 px-5 py-8 text-center text-slate-500 text-sm">
-    Enter a <code>record_id</code> or <code>_entity_id_resolved</code> above to trace an entity through the pipeline.
+<div id="browse-panel" class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+    <div class="px-5 py-3 bg-slate-800 text-xs text-slate-400 uppercase tracking-wide">
+        Recent entities — click any row to trace
+    </div>
+    <div id="browse-rows" class="divide-y divide-slate-800">
+        <p class="px-5 py-4 text-sm text-slate-500">Loading…</p>
+    </div>
 </div>
 {% endif %}
+
+<script>
+    (function () {
+        const input = document.getElementById('trace-input');
+        const list = document.getElementById('trace-suggestions');
+        const browseRows = document.getElementById('browse-rows');
+        let debounce;
+
+        function rowHtml(hit) {
+            const id = hit.record_id ?? hit.entity_id ?? '';
+            const badge = hit.record_id
+                ? '<span class="text-sky-500 font-mono text-xs">' + escHtml(hit.source) + '</span>'
+                : '<span class="text-purple-400 font-mono text-xs">' + escHtml(hit.source) + '</span>';
+            const url = '/ui/trace?q=' + encodeURIComponent(id);
+            return `<a href="${url}" class="flex items-center justify-between px-5 py-2 hover:bg-slate-800/70 gap-4 group">
+            <span class="text-slate-100 truncate group-hover:text-sky-300">${escHtml(hit.name)}</span>
+            <span class="flex items-center gap-3 shrink-0">
+                ${badge}
+                <span class="font-mono text-xs text-slate-400">${escHtml(id)}</span>
+            </span>
+        </a>`;
+        }
+
+        function escHtml(s) {
+            return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function fetchSuggestions(q) {
+            fetch('/api/entities?q=' + encodeURIComponent(q) + '&limit=12')
+                .then(r => r.json())
+                .then(data => {
+                    const hits = data.results || [];
+                    if (!hits.length) { list.classList.add('hidden'); return; }
+                    list.innerHTML = hits.map(hit => {
+                        const id = hit.record_id ?? hit.entity_id ?? '';
+                        const url = '/ui/trace?q=' + encodeURIComponent(id);
+                        return `<li><a href="${url}" class="flex items-center justify-between px-4 py-2 hover:bg-slate-700 gap-3 cursor-pointer">
+                        <span class="text-slate-100 truncate">${escHtml(hit.name)}</span>
+                        <span class="font-mono text-xs text-slate-400 shrink-0">${escHtml(id)}</span>
+                    </a></li>`;
+                    }).join('');
+                    list.classList.remove('hidden');
+                })
+                .catch(() => list.classList.add('hidden'));
+        }
+
+        if (input) {
+            input.addEventListener('input', function () {
+                clearTimeout(debounce);
+                const q = this.value.trim();
+                if (!q) { list.classList.add('hidden'); return; }
+                debounce = setTimeout(() => fetchSuggestions(q), 200);
+            });
+
+            document.addEventListener('click', function (e) {
+                if (!list.contains(e.target) && e.target !== input) {
+                    list.classList.add('hidden');
+                }
+            });
+        }
+
+        if (browseRows) {
+            fetch('/api/entities?limit=20')
+                .then(r => r.json())
+                .then(data => {
+                    const hits = data.results || [];
+                    if (!hits.length) {
+                        browseRows.innerHTML = '<p class="px-5 py-4 text-sm text-slate-500 italic">No entities found yet.</p>';
+                        return;
+                    }
+                    browseRows.innerHTML = hits.map(rowHtml).join('');
+                })
+                .catch(() => {
+                    browseRows.innerHTML = '<p class="px-5 py-4 text-sm text-red-400">Failed to load entities.</p>';
+                });
+        }
+    })();
+</script>
 {% endblock %}

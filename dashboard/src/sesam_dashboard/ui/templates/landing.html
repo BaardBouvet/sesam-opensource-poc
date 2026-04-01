@@ -141,24 +141,25 @@
             <thead class="bg-slate-800 text-slate-400">
                 <tr>
                     <th class="text-left px-4 py-2">view</th>
-                    <th class="text-left px-4 py-2">exists</th>
-                    <th class="text-left px-4 py-2">valid</th>
+                    <th class="text-left px-4 py-2">status</th>
                     <th class="text-right px-4 py-2">rows</th>
                     <th class="text-left px-4 py-2">error</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-800">
                 {% for v in view_checklist %}
-                <tr class="hover:bg-slate-800/50 {% if v.valid == false %}bg-red-950/40{% endif %}">
+                <tr class="hover:bg-slate-800/50 {% if v.valid == false or not v.exists %}bg-red-950/40{% endif %}">
                     <td class="px-4 py-2 font-mono text-slate-200">{{ v.view_name }}</td>
                     <td class="px-4 py-2">
-                        {% if v.exists %}<span class="text-green-400">✓</span>
-                        {% else %}<span class="text-red-400 font-semibold">✗</span>{% endif %}
-                    </td>
-                    <td class="px-4 py-2">
-                        {% if v.valid == true %}<span class="text-green-400">✓</span>
-                        {% elif v.valid == false %}<span class="text-red-400 font-semibold">✗</span>
-                        {% else %}<span class="text-slate-600">—</span>{% endif %}
+                        {% if not v.exists %}
+                        <span class="text-red-400 font-semibold">missing</span>
+                        {% elif v.valid == true %}
+                        <span class="text-green-400">✓ ok</span>
+                        {% elif v.valid == false %}
+                        <span class="text-red-400 font-semibold">✗ broken</span>
+                        {% else %}
+                        <span class="text-slate-600">—</span>
+                        {% endif %}
                     </td>
                     <td class="px-4 py-2 text-right text-slate-300">{{ v.row_count if v.row_count is not none else '—'
                         }}</td>
@@ -170,6 +171,42 @@
             </tbody>
         </table>
     </div>
+</section>
+
+{# ── Webhook last-received ───────────────────────────────────────────────── #}
+<section class="mt-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Webhook Events</h2>
+    {% if not webhooks %}
+    <p class="text-sm text-slate-500 italic">No webhook events recorded yet.</p>
+    {% else %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">connector</th>
+                    <th class="text-left px-4 py-2">datatype</th>
+                    <th class="text-left px-4 py-2">last received</th>
+                    <th class="text-right px-4 py-2">total</th>
+                    <th class="text-right px-4 py-2">errors</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for w in webhooks %}
+                <tr class="hover:bg-slate-800/50">
+                    <td class="px-4 py-2 font-mono text-slate-200">{{ w.connector }}</td>
+                    <td class="px-4 py-2 font-mono text-slate-400">{{ w.datatype or '—' }}</td>
+                    <td class="px-4 py-2 text-slate-300">{{ w.last_received_at or '—' }}</td>
+                    <td class="px-4 py-2 text-right text-slate-300">{{ w.total_count }}</td>
+                    <td
+                        class="px-4 py-2 text-right {% if w.error_count and w.error_count > 0 %}text-red-400 font-semibold{% else %}text-slate-500{% endif %}">
+                        {{ w.error_count if w.error_count else '—' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 </section>
 
 {# ── Pipeline data-flow counts ───────────────────────────────────────────── #}

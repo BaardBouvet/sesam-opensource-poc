@@ -13,7 +13,7 @@ import asyncpg
 
 
 async def fetch_view_checklist(pool: asyncpg.Pool, mapping) -> list[dict]:
-    """For every OSI view expected from mapping.yaml, check exists + validity + row count."""
+    """For every OSI view/table expected from mapping.yaml, check exists + validity + row count."""
     expected_views: list[str] = []
     for target_name in mapping.targets:
         for m in mapping.targets[target_name].mappings:
@@ -21,7 +21,7 @@ async def fetch_view_checklist(pool: asyncpg.Pool, mapping) -> list[dict]:
                 expected_views.append(f"_fwd_{m.name}")
         expected_views.append(f"_id_{target_name}")
         expected_views.append(f"_resolved_{target_name}")
-        expected_views.append(f"_delta_{target_name}")  # may not exist yet
+        expected_views.append(f"_delta_{target_name}")
         expected_views.append(target_name)  # consumer view
 
     results = []
@@ -29,7 +29,7 @@ async def fetch_view_checklist(pool: asyncpg.Pool, mapping) -> list[dict]:
         existing: set[str] = {
             row["table_name"]
             for row in await conn.fetch(
-                "SELECT table_name FROM information_schema.views WHERE table_schema = 'public'"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
             )
         }
         for view_name in expected_views:
@@ -154,6 +154,33 @@ async def fetch_migration_history(pool: asyncpg.Pool) -> list[dict]:
             except Exception:
                 continue
         return []
+
+
+async def fetch_webhook_log_state(pool: asyncpg.Pool) -> list[dict]:
+    """
+    Per (connector, datatype) summary from inout_ops_webhook_log:
+      - last_received_at  – timestamp of the most recent event
+      - total_count       – total events ever received
+      - error_count       – events with status != 'processed'
+    """
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    connector,
+                    datatype,
+                    MAX(received_at)                              AS last_received_at,
+                    COUNT(*)                                      AS total_count,
+                    COUNT(*) FILTER (WHERE status != 'processed') AS error_count
+                FROM inout_ops_webhook_log
+                GROUP BY connector, datatype
+                ORDER BY connector, datatype
+                """
+            )
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +325,115 @@ async def fetch_model_overview(pool: asyncpg.Pool, mapping) -> list[dict]:
                 )
             )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Entity discovery (for trace page search)
+# ---------------------------------------------------------------------------
+
+
+async def fetch_entity_samples(
+    pool: asyncpg.Pool,
+    mapping,
+    q: str = "",
+    limit: int = 20,
+) -> list[dict]:
+    """
+    Search source tables and resolved views for entities matching *q*.
+
+    Each hit has:
+      - record_id   – raw source record_id (present for source hits)
+      - entity_id   – _entity_id_resolved (present for resolved hits)
+      - name        – best-effort display name from data->>'name'
+      - source      – human label (e.g. "hubspot_companies", "_resolved_contacts")
+    """
+    results: list[dict] = []
+    q_lower = q.strip().lower()
+
+    async with pool.acquire() as conn:
+
+        async def safe_fetch(query: str, *args) -> list[asyncpg.Record]:
+            try:
+                return await conn.fetch(query, *args)
+            except Exception:
+                return []
+
+        seen_tables: set[str] = set()
+        for source_name, table_name in mapping.sources.items():
+            if table_name in seen_tables:
+                continue
+            seen_tables.add(table_name)
+
+            if q_lower:
+                rows = await safe_fetch(
+                    f"""
+                    SELECT record_id::text AS record_id,
+                           COALESCE(data->>'name', data->>'fullName', '') AS name
+                    FROM "{table_name}"
+                    WHERE record_id::text ILIKE $1
+                       OR COALESCE(data->>'name', data->>'fullName', '') ILIKE $1
+                    ORDER BY record_id
+                    LIMIT $2
+                    """,
+                    f"%{q_lower}%",
+                    limit,
+                )
+            else:
+                rows = await safe_fetch(
+                    f"""
+                    SELECT record_id::text AS record_id,
+                           COALESCE(data->>'name', data->>'fullName', '') AS name
+                    FROM "{table_name}"
+                    ORDER BY _ingested_at DESC
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            for r in rows:
+                results.append(
+                    dict(
+                        record_id=r["record_id"],
+                        entity_id=None,
+                        name=r["name"] or r["record_id"],
+                        source=source_name,
+                    )
+                )
+
+        for target_name in mapping.targets:
+            resolved_view = f"_resolved_{target_name}"
+            if q_lower:
+                rows = await safe_fetch(
+                    f"""
+                    SELECT _entity_id_resolved::text AS entity_id,
+                           COALESCE(data->>'name', data->>'fullName', '') AS name
+                    FROM "{resolved_view}"
+                    WHERE _entity_id_resolved::text ILIKE $1
+                       OR COALESCE(data->>'name', data->>'fullName', '') ILIKE $1
+                    ORDER BY _entity_id_resolved
+                    LIMIT $2
+                    """,
+                    f"%{q_lower}%",
+                    limit,
+                )
+            else:
+                rows = await safe_fetch(
+                    f"""
+                    SELECT _entity_id_resolved::text AS entity_id,
+                           COALESCE(data->>'name', data->>'fullName', '') AS name
+                    FROM "{resolved_view}"
+                    ORDER BY _entity_id_resolved
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            for r in rows:
+                results.append(
+                    dict(
+                        record_id=None,
+                        entity_id=r["entity_id"],
+                        name=r["name"] or r["entity_id"],
+                        source=f"_resolved_{target_name}",
+                    )
+                )
+
+    return results[:limit]

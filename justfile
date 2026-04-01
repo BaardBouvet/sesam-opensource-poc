@@ -73,6 +73,7 @@ forward:
     kubectl -n {{NAMESPACE}} port-forward svc/schema-manager     9080:9080 &
     kubectl -n {{NAMESPACE}} port-forward statefulset/postgres   5432:5432 &
     kubectl -n {{NAMESPACE}} port-forward svc/grafana            3000:3000 &
+    kubectl -n {{NAMESPACE}} port-forward svc/sesam-dashboard    8888:8888 &
     wait
 
 # Tear down all deployed resources

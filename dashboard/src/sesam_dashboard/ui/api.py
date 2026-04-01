@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from sesam_dashboard.db import (
@@ -12,6 +12,7 @@ from sesam_dashboard.db import (
     fetch_source_table_state,
     fetch_migration_history,
     fetch_pipeline_flow_counts,
+    fetch_entity_samples,
 )
 
 
@@ -63,6 +64,17 @@ def build_api_router() -> APIRouter:
         flow = await fetch_pipeline_flow_counts(pool, mapping)
         return JSONResponse(_jsonable({"flow": flow}))
 
+    @router.get("/entities")
+    async def api_entities(
+        request: Request,
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=20, ge=1, le=100),
+    ):
+        pool = request.app.state.pool
+        mapping = request.app.state.mapping
+        hits = await fetch_entity_samples(pool, mapping, q=q, limit=limit)
+        return JSONResponse(_jsonable({"results": hits}))
+
     @router.post("/reconcile")
     async def api_reconcile(request: Request):
         import httpx
@@ -76,6 +88,8 @@ def build_api_router() -> APIRouter:
                 status_code=resp.status_code,
             )
         except Exception as exc:
-            return JSONResponse({"status": "error", "detail": str(exc)}, status_code=502)
+            return JSONResponse(
+                {"status": "error", "detail": str(exc)}, status_code=502
+            )
 
     return router

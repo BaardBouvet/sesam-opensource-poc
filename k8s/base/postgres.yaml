@@ -9,7 +9,7 @@ metadata:
   labels:
     app: postgres
 spec:
-  clusterIP: None  # headless for StatefulSet stable DNS
+  clusterIP: None # headless for StatefulSet stable DNS
   ports:
     - port: 5432
       targetPort: 5432

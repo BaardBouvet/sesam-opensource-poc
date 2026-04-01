@@ -16,6 +16,7 @@ from sesam_dashboard.db import (
     fetch_migration_history,
     fetch_pipeline_flow_counts,
     fetch_model_overview,
+    fetch_webhook_log_state,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -44,7 +45,9 @@ def build_ui_router() -> APIRouter:
         pool = request.app.state.pool
         mapping = request.app.state.mapping
 
-        view_checklist, gate, streams, sources, flow = await _gather(pool, mapping)
+        view_checklist, gate, streams, sources, flow, webhooks = await _gather(
+            pool, mapping
+        )
 
         return templates.TemplateResponse(
             request,
@@ -55,6 +58,7 @@ def build_ui_router() -> APIRouter:
                 "streams": streams,
                 "sources": sources,
                 "flow": flow,
+                "webhooks": webhooks,
             },
         )
 
@@ -126,5 +130,6 @@ async def _gather(pool, mapping):
         fetch_pgtrickle_stream_state(pool),
         fetch_source_table_state(pool, mapping),
         fetch_pipeline_flow_counts(pool, mapping),
+        fetch_webhook_log_state(pool),
     )
     return results
