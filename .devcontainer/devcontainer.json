@@ -6,6 +6,7 @@
   },
   "workspaceFolder": "/workspaces/sesam-opensource-poc",
   "remoteUser": "vscode",
+  "forwardAgent": true,
 
   // Docker-in-Docker: lets Skaffold build images and run kind inside the container
   "features": {
