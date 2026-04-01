@@ -17,6 +17,8 @@ from sesam_dashboard.db import (
     fetch_pipeline_flow_counts,
     fetch_model_overview,
     fetch_webhook_log_state,
+    fetch_ingest_schedule,
+    fetch_writeback_results,
 )
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -45,9 +47,15 @@ def build_ui_router() -> APIRouter:
         pool = request.app.state.pool
         mapping = request.app.state.mapping
 
-        view_checklist, gate, streams, sources, flow, webhooks = await _gather(
-            pool, mapping
-        )
+        (
+            view_checklist,
+            gate,
+            streams,
+            sources,
+            flow,
+            webhooks,
+            schedule,
+        ) = await _gather(pool, mapping)
 
         return templates.TemplateResponse(
             request,
@@ -59,6 +67,7 @@ def build_ui_router() -> APIRouter:
                 "sources": sources,
                 "flow": flow,
                 "webhooks": webhooks,
+                "schedule": schedule,
             },
         )
 
@@ -102,6 +111,30 @@ def build_ui_router() -> APIRouter:
             {"mapping": mapping},
         )
 
+    @router.get("/ui/writeback", response_class=HTMLResponse)
+    async def writeback(request: Request):
+        import json
+        import datetime
+
+        pool = request.app.state.pool
+        data = await fetch_writeback_results(pool, limit=200)
+
+        def _serial(obj):
+            if isinstance(obj, (datetime.datetime, datetime.date)):
+                return obj.isoformat()
+            raise TypeError(f"Not serializable: {type(obj)}")
+
+        recent_json = json.dumps(data["recent"], default=_serial)
+        return templates.TemplateResponse(
+            request,
+            "writeback.html",
+            {
+                "summary": data["summary"],
+                "recent": data["recent"],
+                "recent_json": recent_json,
+            },
+        )
+
     @router.get("/ui/control", response_class=HTMLResponse)
     async def control(request: Request):
         pool = request.app.state.pool
@@ -131,5 +164,6 @@ async def _gather(pool, mapping):
         fetch_source_table_state(pool, mapping),
         fetch_pipeline_flow_counts(pool, mapping),
         fetch_webhook_log_state(pool),
+        fetch_ingest_schedule(pool),
     )
     return results

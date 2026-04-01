@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Writeback — Sesam Dashboard{% endblock %}
+{% block nav_writeback %}text-sky-400 font-semibold{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold text-slate-100">Writeback Results</h1>
+    <button onclick="location.reload()"
+        class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors">
+        ↻ Refresh
+    </button>
+</div>
+
+{# ── Summary ─────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+    <h2 class="text-base font-semibold text-slate-300 mb-3">Summary by connector × datatype</h2>
+    {% if not summary %}
+    <p class="text-sm text-slate-500 italic">No writeback results found — inout_ops_writeback_result is empty.</p>
+    {% else %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">connector</th>
+                    <th class="text-left px-4 py-2">datatype</th>
+                    <th class="text-right px-4 py-2">total</th>
+                    <th class="text-right px-4 py-2">ok</th>
+                    <th class="text-right px-4 py-2">failed</th>
+                    <th class="text-left px-4 py-2">last write</th>
+                    <th class="text-left px-4 py-2">last failure</th>
+                    <th class="text-left px-4 py-2">last error</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for row in summary %}
+                <tr class="hover:bg-slate-800/50 {% if row.failed_count > 0 %}bg-red-950/20{% endif %}">
+                    <td class="px-4 py-2 font-mono text-slate-200">{{ row.connector }}</td>
+                    <td class="px-4 py-2 font-mono text-slate-400">{{ row.datatype }}</td>
+                    <td class="px-4 py-2 text-right text-slate-300">{{ row.total }}</td>
+                    <td class="px-4 py-2 text-right">
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold bg-green-900 text-green-300">
+                            {{ row.ok_count }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2 text-right">
+                        {% if row.failed_count > 0 %}
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold bg-red-900 text-red-300">
+                            {{ row.failed_count }}
+                        </span>
+                        {% else %}
+                        <span class="text-slate-600">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2 text-slate-400 font-mono text-xs">
+                        {{ row.last_processed_at.isoformat() if row.last_processed_at else '—' }}
+                    </td>
+                    <td
+                        class="px-4 py-2 font-mono text-xs {% if row.last_failure_at %}text-red-400{% else %}text-slate-600{% endif %}">
+                        {{ row.last_failure_at.isoformat() if row.last_failure_at else '—' }}
+                    </td>
+                    <td class="px-4 py-2 text-red-300 max-w-xs truncate" title="{{ row.last_error_message or '' }}">
+                        {{ row.last_error_message or '—' }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Recent writes ────────────────────────────────────────────────────────── #}
+<section>
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="text-base font-semibold text-slate-300">
+            Recent writes
+            <span class="text-xs font-normal text-slate-500 ml-1">(last {{ recent | length }})</span>
+        </h2>
+        <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+            <input type="checkbox" id="failed-only-toggle" class="accent-red-500" onchange="filterRows(this.checked)">
+            Show failed only
+        </label>
+    </div>
+
+    {% if not recent %}
+    <p class="text-sm text-slate-500 italic">No recent writes.</p>
+    {% else %}
+    <div class="bg-slate-900 rounded-xl border border-slate-700 overflow-x-auto">
+        <table class="w-full text-xs" id="recent-table">
+            <thead class="bg-slate-800 text-slate-400">
+                <tr>
+                    <th class="text-left px-4 py-2">connector</th>
+                    <th class="text-left px-4 py-2">datatype</th>
+                    <th class="text-left px-4 py-2">action</th>
+                    <th class="text-left px-4 py-2">status</th>
+                    <th class="text-left px-4 py-2">external_id</th>
+                    <th class="text-right px-4 py-2">http</th>
+                    <th class="text-left px-4 py-2">error</th>
+                    <th class="text-left px-4 py-2">processed_at</th>
+                    <th class="px-4 py-2"></th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for row in recent %}
+                <tr class="hover:bg-slate-800/50 {% if row.status == 'failed' %}bg-red-950/30 data-failed{% endif %}" {%
+                    if row.status=='failed' %}data-failed="1" {% endif %}>
+                    <td class="px-4 py-2 font-mono text-slate-200">{{ row.connector }}</td>
+                    <td class="px-4 py-2 font-mono text-slate-400">{{ row.datatype }}</td>
+                    <td class="px-4 py-2">
+                        <span class="px-2 py-0.5 rounded font-semibold
+                            {% if row.action == 'insert' %}bg-green-900 text-green-300
+                            {% elif row.action == 'update' %}bg-sky-900 text-sky-300
+                            {% elif row.action == 'delete' %}bg-red-900 text-red-300
+                            {% else %}bg-slate-700 text-slate-400{% endif %}">
+                            {{ row.action }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2">
+                        <span class="px-2 py-0.5 rounded font-semibold
+                            {% if row.status == 'ok' %}bg-green-900 text-green-300
+                            {% else %}bg-red-900 text-red-300{% endif %}">
+                            {{ row.status }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2 font-mono text-slate-300">{{ row.external_id or '—' }}</td>
+                    <td class="px-4 py-2 text-right font-mono
+                        {% if row.response_status and row.response_status >= 400 %}text-red-400
+                        {% elif row.response_status and row.response_status >= 200 %}text-green-400
+                        {% else %}text-slate-500{% endif %}">
+                        {{ row.response_status or '—' }}
+                    </td>
+                    <td class="px-4 py-2 text-red-300 max-w-xs truncate" title="{{ row.error_message or '' }}">
+                        {{ row.error_message or '' }}
+                    </td>
+                    <td class="px-4 py-2 font-mono text-slate-500">
+                        {{ row.processed_at.isoformat() if row.processed_at else '—' }}
+                    </td>
+                    <td class="px-4 py-2">
+                        <button class="text-sky-400 hover:underline"
+                            onclick="openDetail({{ loop.index0 }})">detail</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</section>
+
+{# ── Detail modal ─────────────────────────────────────────────────────────── #}
+<dialog id="detail-modal"
+    class="w-full max-w-4xl rounded-xl bg-slate-900 border border-slate-600 p-0 text-slate-200 backdrop:bg-slate-950/70">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-700">
+        <h3 class="text-sm font-semibold" id="detail-title">Writeback detail</h3>
+        <button onclick="document.getElementById('detail-modal').close()"
+            class="text-slate-400 hover:text-slate-100 text-lg leading-none">✕</button>
+    </div>
+    <div id="detail-body" class="px-5 py-4 overflow-auto max-h-[70vh] space-y-4 text-xs"></div>
+</dialog>
+
+<script>
+    {# Embed the recent rows as JSON for the detail modal # }
+    const ROWS = {{ recent_json | safe }};
+
+    function filterRows(failedOnly) {
+        const rows = document.querySelectorAll('#recent-table tbody tr');
+        rows.forEach(tr => {
+            if (failedOnly && !tr.dataset.failed) {
+                tr.style.display = 'none';
+            } else {
+                tr.style.display = '';
+            }
+        });
+    }
+
+    function openDetail(idx) {
+        const row = ROWS[idx];
+        const title = document.getElementById('detail-title');
+        const body = document.getElementById('detail-body');
+        title.textContent = `#${row.id} — ${row.connector}/${row.datatype} ${row.action} (${row.status})`;
+
+        const sections = [
+            ['Meta', {
+                connector: row.connector,
+                datatype: row.datatype,
+                action: row.action,
+                status: row.status,
+                external_id: row.external_id,
+                response_status: row.response_status,
+                protection_level: row.protection_level,
+                run_id: row.run_id,
+                processed_at: row.processed_at,
+            }],
+            ['Error', row.error_message || null],
+            ['Field diff (sent)', row.field_diff],
+            ['Response body', row.response_body],
+            ['Payload snapshot', row.payload_snapshot],
+        ];
+
+        body.innerHTML = sections.map(([label, data]) => {
+            if (data === null || data === undefined) return '';
+            const content = (typeof data === 'string')
+                ? `<pre class="whitespace-pre-wrap break-all text-red-300">${escHtml(data)}</pre>`
+                : `<pre class="whitespace-pre-wrap break-all text-slate-300">${escHtml(JSON.stringify(data, null, 2))}</pre>`;
+            return `<div>
+                <p class="text-slate-500 font-semibold mb-1 uppercase tracking-wide text-xs">${escHtml(label)}</p>
+                <div class="bg-slate-950 rounded-lg p-3 overflow-auto">${content}</div>
+            </div>`;
+        }).join('');
+
+        document.getElementById('detail-modal').showModal();
+    }
+
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+</script>
+{% endblock %}

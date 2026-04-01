@@ -1,0 +1,33 @@
+# postgres_exporter custom queries for component_state gate.
+#
+# The schema-manager writes to component_state to allow or block ingest/writeback.
+# These metrics surface the current gate state so Grafana can show whether
+# each component has been released to run.
+#
+# Metric: pg_component_state_state_code{component, desired}
+#   2 = running  (gate open, normal operation)
+#   1 = shadow   (gate half-open, read-only dry-run)
+#   0 = stopped  (gate closed, schema migration in progress)
+
+pg_component_state:
+  query: |
+    SELECT
+        component,
+        desired,
+        CASE desired
+            WHEN 'running' THEN 2
+            WHEN 'shadow'  THEN 1
+            WHEN 'stopped' THEN 0
+            ELSE 0
+        END AS state_code
+    FROM component_state
+  metrics:
+    - component:
+        usage: LABEL
+        description: "Component name (ingest, writeback)"
+    - desired:
+        usage: LABEL
+        description: "Current desired state written by schema-manager"
+    - state_code:
+        usage: GAUGE
+        description: "Gate code: 2=running, 1=shadow, 0=stopped"

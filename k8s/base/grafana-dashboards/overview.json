@@ -314,7 +314,7 @@
       "id": 4,
       "type": "stat",
       "title": "Writeback",
-      "description": "DOWN if scrape fails; DEGRADED if any circuit breaker is open or half-open",
+      "description": "DOWN if scrape fails or any circuit breaker is open",
       "gridPos": {
         "x": 12,
         "y": 0,
@@ -401,7 +401,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "clamp_min(up{job=\"inandout-writeback\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-writeback\"} > 0) or vector(0), 1), 0)",
+          "expr": "clamp_min(up{job=\"inandout-writeback\"} * 2 - on() group_left() clamp_max(count(inout_circuit_breaker_state{job=\"inandout-writeback\"} > 0) or vector(0), 1) * 2, 0)",
           "refId": "A",
           "instant": true,
           "legendFormat": ""
@@ -704,6 +704,261 @@
           "expr": "up{job=\"sesam-dashboard\"} * 2",
           "instant": true,
           "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Ingest Gate",
+      "description": "component_state.desired for ingest: RUNNING (schema-manager released gate) / SHADOW (dry-run only) / STOPPED (schema migration in progress)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 6,
+        "w": 4,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "dark-red",
+                  "index": 0,
+                  "text": "STOPPED"
+                },
+                "1": {
+                  "color": "orange",
+                  "index": 1,
+                  "text": "SHADOW"
+                },
+                "2": {
+                  "color": "dark-green",
+                  "index": 2,
+                  "text": "RUNNING"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "color": "dark-red",
+                  "index": 3,
+                  "text": "NO DATA"
+                }
+              }
+            }
+          ],
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "pg_component_state_state_code{component=\"ingest\"}",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Writeback Gate",
+      "description": "component_state.desired for writeback: RUNNING / SHADOW / STOPPED",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 6,
+        "w": 4,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "dark-red",
+                  "index": 0,
+                  "text": "STOPPED"
+                },
+                "1": {
+                  "color": "orange",
+                  "index": 1,
+                  "text": "SHADOW"
+                },
+                "2": {
+                  "color": "dark-green",
+                  "index": 2,
+                  "text": "RUNNING"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "color": "dark-red",
+                  "index": 3,
+                  "text": "NO DATA"
+                }
+              }
+            }
+          ],
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "dark-green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "pg_component_state_state_code{component=\"writeback\"}",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Component Gate Changes",
+      "description": "Rate of schema-manager gate transitions per component. Spikes indicate a schema migration cycle (gate closed then re-opened).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "rate(schema_component_state_changes_total[5m])",
+          "instant": false,
+          "legendFormat": "{{component}} \u2192 {{desired}}",
           "refId": "A"
         }
       ]

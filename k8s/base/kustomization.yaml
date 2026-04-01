@@ -57,6 +57,7 @@ configMapGenerator:
       disableNameSuffixHash: true
     files:
       - pg_trickle_queries.yml=../../vendor/pg-trickle/monitoring/prometheus/pg_trickle_queries.yml
+      - component_state_queries.yml=component_state_queries.yml
 
   - name: alertmanager-config
     namespace: sesam-poc
@@ -71,10 +72,10 @@ configMapGenerator:
       disableNameSuffixHash: true
     files:
       - inandout.json=../../vendor/in-and-out/observability/grafana/dashboards/inandout.json
-      - pg_trickle_overview.json=pg_trickle_overview.json
-      - overview.json=overview.json
-      - postgres_overview.json=postgres_overview.json
-      - prometheus_overview.json=prometheus_overview.json
+      - pg_trickle_overview.json=grafana-dashboards/pg_trickle_overview.json
+      - overview.json=grafana-dashboards/overview.json
+      - postgres_overview.json=grafana-dashboards/postgres_overview.json
+      - prometheus_overview.json=grafana-dashboards/prometheus_overview.json
 
   - name: grafana-provisioning-datasources
     namespace: sesam-poc

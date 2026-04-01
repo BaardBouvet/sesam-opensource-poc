@@ -19,9 +19,9 @@ async def fetch_view_checklist(pool: asyncpg.Pool, mapping) -> list[dict]:
         for m in mapping.targets[target_name].mappings:
             if not m.parent:  # skip derived mappings — they share a source table
                 expected_views.append(f"_fwd_{m.name}")
+                expected_views.append(f"_delta_{m.name}")
         expected_views.append(f"_id_{target_name}")
         expected_views.append(f"_resolved_{target_name}")
-        expected_views.append(f"_delta_{target_name}")
         expected_views.append(target_name)  # consumer view
 
     results = []
@@ -156,6 +156,122 @@ async def fetch_migration_history(pool: asyncpg.Pool) -> list[dict]:
         return []
 
 
+async def fetch_view_rows(pool: asyncpg.Pool, view_name: str, limit: int = 50) -> dict:
+    """
+    Return the first *limit* rows from *view_name* (public schema only).
+
+    Returns {"columns": [...], "rows": [[...], ...]} or raises ValueError if
+    the view does not exist in the public schema.
+    """
+    import re
+    import datetime
+    import decimal
+    import uuid
+
+    if not re.fullmatch(r"[A-Za-z0-9_]+", view_name):
+        raise ValueError(f"Invalid view name: {view_name!r}")
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = $1",
+            view_name,
+        )
+        if not exists:
+            raise ValueError(f"View not found in public schema: {view_name!r}")
+        rows = await conn.fetch(f'SELECT * FROM "{view_name}" LIMIT $1', limit)
+    if not rows:
+        return {"columns": [], "rows": []}
+
+    def _safe(v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, (bool, int, float, str)):
+            return v
+        if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+            return v.isoformat()
+        if isinstance(v, decimal.Decimal):
+            return float(v)
+        if isinstance(v, uuid.UUID):
+            return str(v)
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            return v.hex() if not isinstance(v, memoryview) else bytes(v).hex()
+        if isinstance(v, dict):
+            return {k: _safe(val) for k, val in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_safe(i) for i in v]
+        return str(v)
+
+    columns = list(rows[0].keys())
+    return {
+        "columns": columns,
+        "rows": [[_safe(v) for v in row.values()] for row in rows],
+    }
+
+
+async def fetch_ingest_schedule(pool: asyncpg.Pool) -> list[dict]:
+    """
+    For each connector+datatype that has ever synced, return:
+      - last sync time, status, record counts, error
+      - current watermark (incremental cursor)
+      - empirical poll interval (seconds between last two runs)
+      - estimated next_poll_at (last_finished_at + interval)
+    """
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                WITH ranked AS (
+                    SELECT
+                        connector, datatype,
+                        started_at, finished_at, status,
+                        records_fetched, records_inserted, records_updated, records_deleted,
+                        error_message,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY connector, datatype
+                            ORDER BY started_at DESC
+                        ) AS rn
+                    FROM inout_ops_sync_run
+                    WHERE status IN ('completed', 'skipped', 'failed')
+                ),
+                latest AS (SELECT * FROM ranked WHERE rn = 1),
+                prev   AS (
+                    SELECT connector, datatype, started_at AS prev_started_at
+                    FROM ranked WHERE rn = 2
+                ),
+                wm AS (
+                    SELECT connector, datatype, watermark_value, updated_at AS watermark_updated_at
+                    FROM inout_ops_watermark
+                )
+                SELECT
+                    l.connector,
+                    l.datatype,
+                    l.started_at        AS last_started_at,
+                    l.finished_at       AS last_finished_at,
+                    l.status            AS last_status,
+                    l.records_fetched,
+                    l.records_inserted,
+                    l.records_updated,
+                    l.records_deleted,
+                    l.error_message,
+                    w.watermark_value,
+                    w.watermark_updated_at,
+                    CASE WHEN p.prev_started_at IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (l.started_at - p.prev_started_at))::int
+                    END AS interval_seconds,
+                    CASE WHEN p.prev_started_at IS NOT NULL AND l.finished_at IS NOT NULL
+                        THEN l.finished_at + (l.started_at - p.prev_started_at)
+                    END AS next_poll_at
+                FROM latest l
+                LEFT JOIN prev p USING (connector, datatype)
+                LEFT JOIN wm   w USING (connector, datatype)
+                ORDER BY l.connector, l.datatype
+                """
+            )
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+
 async def fetch_webhook_log_state(pool: asyncpg.Pool) -> list[dict]:
     """
     Per (connector, datatype) summary from inout_ops_webhook_log:
@@ -227,12 +343,16 @@ async def fetch_pipeline_flow_counts(pool: asyncpg.Pool, mapping) -> list[dict]:
 
                 pending_count: int | None = None
                 written_count: int | None = None
+                dst_table: str | None = None
+                # Pending writes: count non-noop rows from the OSI-mapping delta view.
+                # The writeback engine reads from _delta_{mapping} by default, not
+                # inout_dst_* (desired-state table), so we query the same source.
+                delta_view = f"_delta_{m.name}"
+                pending_count = await safe_count(
+                    f"""SELECT COUNT(*) FROM "{delta_view}" WHERE _action != 'noop'"""
+                )
                 if m.written_state:
-                    dst_table = m.written_state.table.replace("_lwstate", "")
-                    pending_count = await safe_count(
-                        f"""SELECT COUNT(*) FROM "{dst_table}"
-                            WHERE _action IS NOT NULL AND _action != 'noop'"""
-                    )
+                    dst_table = delta_view  # used for "pending write" click-through
                     written_count = await safe_count(
                         f'SELECT COUNT(*) FROM "{m.written_state.table}"'
                     )
@@ -242,15 +362,19 @@ async def fetch_pipeline_flow_counts(pool: asyncpg.Pool, mapping) -> list[dict]:
                         mapping_name=m.name,
                         target=target_name,
                         source_table=m.source_table,
+                        fwd_table=fwd_view,
+                        id_table=id_view,
+                        resolved_table=resolved_view,
+                        dst_table=dst_table,
+                        written_state_table=m.written_state.table
+                        if m.written_state
+                        else None,
                         src_count=src_count,
                         fwd_count=fwd_count,
                         cluster_count=cluster_count,
                         resolved_count=resolved_count,
                         pending_count=pending_count,
                         written_count=written_count,
-                        written_state_table=m.written_state.table
-                        if m.written_state
-                        else None,
                     )
                 )
     return results
@@ -330,6 +454,65 @@ async def fetch_model_overview(pool: asyncpg.Pool, mapping) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Entity discovery (for trace page search)
 # ---------------------------------------------------------------------------
+
+
+async def fetch_writeback_results(pool: asyncpg.Pool, limit: int = 100) -> dict:
+    """
+    Return writeback audit data from inout_ops_writeback_result.
+
+    Returns {"summary": [...], "recent": [...]} where:
+    - summary: per (connector, datatype) aggregate counts + last error
+    - recent: last *limit* rows with all columns for inline inspection
+    """
+    async with pool.acquire() as conn:
+        try:
+            summary_rows = await conn.fetch(
+                """
+                SELECT
+                    connector,
+                    datatype,
+                    COUNT(*)                                                       AS total,
+                    COUNT(*) FILTER (WHERE status = 'ok')                          AS ok_count,
+                    COUNT(*) FILTER (WHERE status = 'failed')                      AS failed_count,
+                    MAX(processed_at)                                              AS last_processed_at,
+                    MAX(processed_at) FILTER (WHERE status = 'failed')             AS last_failure_at,
+                    (ARRAY_AGG(error_message ORDER BY processed_at DESC)
+                        FILTER (WHERE status = 'failed')
+                    )[1]                                                            AS last_error_message
+                FROM inout_ops_writeback_result
+                GROUP BY connector, datatype
+                ORDER BY last_processed_at DESC NULLS LAST
+                """
+            )
+            recent_rows = await conn.fetch(
+                """
+                SELECT
+                    id,
+                    connector,
+                    datatype,
+                    action,
+                    external_id,
+                    status,
+                    error_message,
+                    response_status,
+                    field_diff,
+                    response_body,
+                    payload_snapshot,
+                    protection_level,
+                    run_id::text AS run_id,
+                    processed_at
+                FROM inout_ops_writeback_result
+                ORDER BY processed_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            return {
+                "summary": [dict(r) for r in summary_rows],
+                "recent": [dict(r) for r in recent_rows],
+            }
+        except Exception:
+            return {"summary": [], "recent": []}
 
 
 async def fetch_entity_samples(

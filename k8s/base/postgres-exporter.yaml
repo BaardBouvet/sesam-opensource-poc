@@ -45,7 +45,7 @@ spec:
             - name: DATA_SOURCE_NAME
               value: "postgresql://inandout:$(POSTGRES_PASSWORD)@postgres:5432/inandout?sslmode=disable"
             - name: PG_EXPORTER_EXTEND_QUERY_PATH
-              value: /etc/postgres_exporter/pg_trickle_queries.yml
+              value: /etc/postgres_exporter/queries
           ports:
             - name: metrics
               containerPort: 9187
@@ -65,8 +65,7 @@ spec:
             failureThreshold: 4
           volumeMounts:
             - name: queries
-              mountPath: /etc/postgres_exporter/pg_trickle_queries.yml
-              subPath: pg_trickle_queries.yml
+              mountPath: /etc/postgres_exporter/queries
       volumes:
         - name: queries
           configMap:

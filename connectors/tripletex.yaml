@@ -141,7 +141,6 @@ connector:
       writeback:
         protection_level: 2
         conflict_resolution: last_writer_wins
-        use_desired_state_table: false
         supported_actions:
           - update
           - insert
@@ -211,7 +210,6 @@ connector:
       writeback:
         protection_level: 2
         conflict_resolution: last_writer_wins
-        use_desired_state_table: false
         supported_actions:
           - update
           - insert

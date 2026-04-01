@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from fastapi import HTTPException
+
 from sesam_dashboard.db import (
     fetch_view_checklist,
     fetch_component_gate,
@@ -13,6 +15,8 @@ from sesam_dashboard.db import (
     fetch_migration_history,
     fetch_pipeline_flow_counts,
     fetch_entity_samples,
+    fetch_view_rows,
+    fetch_writeback_results,
 )
 
 
@@ -74,6 +78,28 @@ def build_api_router() -> APIRouter:
         mapping = request.app.state.mapping
         hits = await fetch_entity_samples(pool, mapping, q=q, limit=limit)
         return JSONResponse(_jsonable({"results": hits}))
+
+    @router.get("/view/{view_name}/rows")
+    async def api_view_rows(
+        request: Request,
+        view_name: str,
+        limit: int = Query(default=50, ge=1, le=500),
+    ):
+        pool = request.app.state.pool
+        try:
+            data = await fetch_view_rows(pool, view_name, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return JSONResponse(_jsonable(data))
+
+    @router.get("/writeback")
+    async def api_writeback(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        pool = request.app.state.pool
+        data = await fetch_writeback_results(pool, limit=limit)
+        return JSONResponse(_jsonable(data))
 
     @router.post("/reconcile")
     async def api_reconcile(request: Request):
