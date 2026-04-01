@@ -45,6 +45,8 @@ spec:
             - --engine-url
             - http://inandout-ingest:9090
           env:
+            - name: PYTHONPATH
+              value: /app/src
             - name: INOUT_SIMULATOR_STORE
               valueFrom:
                 secretKeyRef:
